@@ -12,7 +12,7 @@ library(knitr)
 library(synapseClient)
 library(DESeq2)
 library(vcd)
-# library(CHBUtils)
+source("../R/lib/qc.R")
 library(corrplot)
 
 synapseLogin()
@@ -63,25 +63,13 @@ I looked for a way to get a correlation p-value and a rho value for categorical
 variables. I found that, that is quite similar, and could give us an idea.
 
 ```{r cor}
-get_cor = function(v){
-    v=as.character(v)
-    x = as.factor(as.character(meta_clean[,v[1]]))
-    y = as.factor(as.character(meta_clean[,v[2]]))
-    dd = data.frame(x=x,y=y)
-    dd = dd[rowSums(is.na(dd))==0,]
-    sm = chisq.test(dd$y, dd$x) # get a p-value
-    r= assocstats(xtabs(~x+y,data=dd))$cramer # get a R^2 value for categorical vars
-    pval = sm$p.value
-    list(r,pval)
-}
-
 cols = c("originating.lab",
          "Diffname.short","Gender","Tissue.of.Origin",
          "Cell.Type.of.Origin","Cell.Line.Type","Reprogramming.Gene.Combination")
 cols_format = sub("[::.::]","\n",cols) # reduce space of labels in heapmap
 
 comp = expand.grid(cols,cols)
-c = apply(comp,1,get_cor)
+c = apply(comp,1,corr_two_nominal_vars,meta_clean)
 res = cbind(comp,do.call(rbind,c))
 names(res)[3:4] = c("cor","pvalue")
 
@@ -112,7 +100,7 @@ I used DESeq2 because for miRNA, I always found to normalized better, since ther
 
 If we want to look for a general UP/DOWN regulation, this is not valid.
 
-```{r deseq2}
+```{r deseq2, cache=TRUE}
 dds = DESeqDataSetFromMatrix(mat[rowMeans(mat)>5,], colData = meta_clean, design =~1)
 rlogMat = rlog(dds, blind= TRUE)
 ```

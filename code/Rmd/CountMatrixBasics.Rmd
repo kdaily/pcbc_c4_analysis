@@ -39,12 +39,12 @@ countMat <- as.matrix(countMat)
 
 Get the metadata from the table.
 
-Lines failing QC are removed (using `pass_qc`), and lines annotated as being 'bad' for some other reason as well (using `bad_lines`). Only samples that are present in the count matrix and the metadata are included; some are likely missing and need to be added.
+Lines failing QC are removed (using `pass_qc`), and lines annotated as being 'bad' for some other reason as well (using `exclude`). Only samples that are present in the count matrix and the metadata are included; some are likely missing and need to be added.
 
 ```{r getmetadata, echo=TRUE}
 metadataTable <- synGet("syn3156503")
 
-colsToUse <- c("UID", "C4_Cell_Line_ID", "bad_lines", "pass_qc", "SampleType", "Cell_Type", "Cell_Line_Type", 
+colsToUse <- c("UID", "C4_Cell_Line_ID", "exclude", "pass_qc", "SampleType", "Cell_Type", "Cell_Line_Type", 
                "Cell_Type_of_Origin", "Cell_Line_of_Origin", "Tissue_of_Origin", "Reprogramming_Vector_Type",
                "Reprogramming_Gene_Combination", "C4_Karyotype_Result", "High_Confidence_Donor_ID")
 q <- sprintf("SELECT * FROM %s", metadataTable@properties$id)
@@ -52,7 +52,7 @@ q <- sprintf("SELECT * FROM %s", metadataTable@properties$id)
 metadata <- synTableQuery(q)@values
 
 ## Remove fail qc and bad lines
-metadataFinal <- filter(metadata, !bad_lines, pass_qc, UID %in% colnames(countMat))
+metadataFinal <- filter(metadata, !exclude, pass_qc, UID %in% colnames(countMat))
 
 rownames(metadataFinal) <- metadataFinal$UID
 ```
