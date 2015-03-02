@@ -1,0 +1,57 @@
+"""This runs on an Amazon instance (AMI ID XXXXXXXX).
+
+Runs best using StarCluster.
+
+"""
+
+import os
+import csv
+
+# For running synapse client, which requires python 2
+PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2.7/bin/activate"
+
+SAMPLE_FILE = list(csv.DictReader(open("../input/test.csv")))
+SAMPLE_FILE = SAMPLE_FILE[:5]
+
+SAMPLE_DICT = dict([(x["UID"], "../input/samples/%s.txt" % x["UID"]) for x in SAMPLE_FILE])
+
+def myfunc(wildcards):
+    try:
+        files = SAMPLE_DICT[wildcards[0]]
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return files
+
+rule all:
+     input: expand('../output/{sample}.txt', sample=SAMPLE_DICT.keys())
+     
+rule test:
+    input: myfunc
+    output: '../output/{sample}.txt'
+    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',scratchdir="/tmp"
+    threads: 4
+    shell: """source {params.python2virtenv}; \
+
+              # Setup
+
+              # Temporary directory for a sample; required b/c unmapped files are all called unmapped
+              mkdir {params.scratchdir}/{params.sample} ; \
+              
+              # Get files from synapse
+              cp {input} {params.scratchdir}/{params.sample}/ ; \
+              pushd {params.scratchdir}/{params.sample} ; \
+              cat `basename {input}` | xargs -n 1 synapse get ; \
+              popd ; \
+              
+              ## Do the work
+              ls -l {params.scratchdir}/{params.sample}/{params.sample}.bam {params.scratchdir}/{params.sample}/unmapped.bam > {output} ; \
+
+              ## Cleanup
+              rm -rf {params.scratchdir}/{params.sample}; \
+              
+              deactivate ; \
+           """
+
