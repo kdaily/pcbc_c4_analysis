@@ -15,6 +15,12 @@ SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
 FASTQ_DIR = "/external-data/DAT_114__PCBC_Data/mRNA/fastq/"
+BOWTIE_TRANSCRIPTS = "/input/transcripts/knownGene"
+TARGET_FILE = "./input/knownGene.fasta"
+
+# For provenance
+BOWTIE2_SYNID = "syn3270408"
+EXPRESS_SYNID = "syn2243152"
 
 def get_filename(wildcards):
     try:
@@ -47,17 +53,27 @@ def get_sample_info(wildcards):
     return info
 
 rule all:
-     input: expand('./output/bowtie/{sample}.txt', sample=SAMPLE_DICT.keys())
+     input: expand('./output/ucsc/eXpress/{sample}.txt', sample=SAMPLE_DICT.keys())
      
-rule bowtie:
+rule bowtie_express:
     input: './input/samples/{sample}.txt'
-    output: './output/bowtie/{sample}.txt'
-    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename
+    output: './output/ucsc/eXpress/{sample}.txt'
+    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 4
     shell: """source {params.python2virtenv}; \
-                    	      
-              ## Do the work
-	      ls -l {params.fastqdir}/{params.filename} > {output} ; \
+    	      
+              ## setup
+	      mkdir -P {params.scratchdir}/eXpress/{params.sample} ; \
+
+	      # Work
+	      bowtie -aS --offrate 1 {params.bowtie_transcripts} -1 {params.fastqdir}/{params.filename} | express --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
+	      
+	      # Save
+	      mv {params.scratchdir}/eXpress/{params.sample}/results.xprs ./output/eXpress/{params.sample}_results.xprs 
+	      mv {params.scratchdir}/eXpress/{params.sample}/params.xprs ./output/eXpress/{params.sample}_params.xprs 
+
+	      ## cleanup
+	      rm -rf {params.scratchdir}/eXpress/{params.sample}/
+
               deactivate ; \
            """
-	    
