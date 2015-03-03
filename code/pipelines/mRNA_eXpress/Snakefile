@@ -15,8 +15,8 @@ SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
 FASTQ_DIR = "/external-data/DAT_114__PCBC_Data/mRNA/fastq/"
-BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/knownGene"
-TARGET_FILE = "./input/knownGene.fasta"
+BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/hg19_knownGene"
+TARGET_FILE = "./input/hg19_knownGene.fasta"
 
 # For provenance
 BOWTIE2_SYNID = "syn3270408"
@@ -60,8 +60,7 @@ rule bowtie_express:
     output: './output/ucsc/eXpress/{sample}.txt'
     params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 4
-    shell: """source {params.python2virtenv}; \
-    	      
+    shell: """
               ## setup
 	      mkdir -p {params.scratchdir}/eXpress/{params.sample} ; \
 
@@ -73,7 +72,9 @@ rule bowtie_express:
 	      mv {params.scratchdir}/eXpress/{params.sample}/params.xprs ./output/eXpress/{params.sample}_params.xprs 
 
 	      ## cleanup
-	      rm -rf {params.scratchdir}/eXpress/{params.sample}/
-
-              deactivate ; \
+	      # rm -rf {params.scratchdir}/eXpress/{params.sample}/
+	      
+	      ## Synapse stuff here
+	      source {params.python2virtenv}; \
+    	      deactivate ; \
            """
