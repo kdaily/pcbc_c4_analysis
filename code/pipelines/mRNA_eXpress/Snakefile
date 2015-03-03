@@ -15,7 +15,7 @@ SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
 FASTQ_DIR = "/external-data/DAT_114__PCBC_Data/mRNA/fastq/"
-BOWTIE_TRANSCRIPTS = "/input/transcripts/knownGene"
+BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/knownGene"
 TARGET_FILE = "./input/knownGene.fasta"
 
 # For provenance
@@ -63,10 +63,10 @@ rule bowtie_express:
     shell: """source {params.python2virtenv}; \
     	      
               ## setup
-	      mkdir -P {params.scratchdir}/eXpress/{params.sample} ; \
+	      mkdir -p {params.scratchdir}/eXpress/{params.sample} ; \
 
 	      # Work
-	      bowtie -aS --offrate 1 {params.bowtie_transcripts} -1 {params.fastqdir}/{params.filename} | express --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
+	      bowtie -aS {params.bowtie_transcripts} <(gunzip -c {params.fastqdir}/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
 	      
 	      # Save
 	      mv {params.scratchdir}/eXpress/{params.sample}/results.xprs ./output/eXpress/{params.sample}_results.xprs 
