@@ -39,3 +39,7 @@ dds <- DESeq(dds, parallel=TRUE)
 
 ## regularized log transformation
 rld <- rlog(dds, blind=TRUE, fast=TRUE)
+
+finalmat <- cbind(data.frame(ID=rownames(rld)), as.data.frame(assay(rld)))
+write.csv(finalmat, file="DESeq2_rlog.csv", row.names=FALSE)
+
