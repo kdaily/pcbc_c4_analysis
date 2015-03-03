@@ -60,7 +60,7 @@ rule bowtie_express:
     output: './output/ucsc/eXpress/{sample}.txt'
     params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 4
-    shell: """
+    shell: """module load bowtie ; \
               ## setup
 	      mkdir -p {params.scratchdir}/eXpress/{params.sample} ; \
 
