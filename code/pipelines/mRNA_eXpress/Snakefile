@@ -13,7 +13,6 @@ SAMPLE_FILE = SAMPLE_FILE
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
-FASTQ_DIR = "/external-data/DAT_114__PCBC_Data/mRNA/fastq/"
 BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/hg19_knownGene"
 TARGET_FILE = "./input/transcripts/hg19_knownGene.fasta"
 
@@ -57,7 +56,7 @@ rule all:
 rule bowtie_express:
     input: './input/samples/{sample}.txt'
     output: './output/eXpress/ucsc/{sample}_results.xprs', 
-    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
+    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 6
     shell: """## setup
 	      mkdir -p {params.scratchdir}/{params.sample}/eXpress/ ; \
