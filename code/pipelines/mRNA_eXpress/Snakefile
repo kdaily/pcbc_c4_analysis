@@ -6,8 +6,7 @@ import os
 import csv
 
 # For running synapse client, which requires python 2
-# PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2.7/bin/activate"
-PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
+PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2.7/bin/activate"
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_FILE = SAMPLE_FILE
