@@ -7,16 +7,16 @@ import csv
 
 # For running synapse client, which requires python 2
 # PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2.7/bin/activate"
-PY2VIRTENV = "/home/kdaily/.virtualenvs/synpydev/bin/activate"
+PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-# SAMPLE_FILE = SAMPLE_FILE[:50]
+SAMPLE_FILE = SAMPLE_FILE
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
 FASTQ_DIR = "/external-data/DAT_114__PCBC_Data/mRNA/fastq/"
 BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/hg19_knownGene"
-TARGET_FILE = "./input/hg19_knownGene.fasta"
+TARGET_FILE = "./input/transcripts/hg19_knownGene.fasta"
 
 # For provenance
 BOWTIE2_SYNID = "syn3270408"
@@ -53,23 +53,22 @@ def get_sample_info(wildcards):
     return info
 
 rule all:
-     input: expand('./output/ucsc/eXpress/{sample}.txt', sample=SAMPLE_DICT.keys())
+     input: expand('./output/eXpress/ucsc/{sample}_results.xprs', sample=SAMPLE_DICT.keys())
      
 rule bowtie_express:
     input: './input/samples/{sample}.txt'
-    output: './output/ucsc/eXpress/{sample}.txt'
+    output: './output/eXpress/ucsc/{sample}_results.xprs', 
     params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
-    threads: 4
-    shell: """module load bowtie ; \
-              ## setup
+    threads: 6
+    shell: """## setup
 	      mkdir -p {params.scratchdir}/eXpress/{params.sample} ; \
 
 	      # Work
-	      bowtie -aS {params.bowtie_transcripts} <(gunzip -c {params.fastqdir}/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
+	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.fastqdir}/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
 	      
 	      # Save
-	      mv {params.scratchdir}/eXpress/{params.sample}/results.xprs ./output/eXpress/{params.sample}_results.xprs 
-	      mv {params.scratchdir}/eXpress/{params.sample}/params.xprs ./output/eXpress/{params.sample}_params.xprs 
+	      mv {params.scratchdir}/eXpress/{params.sample}/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs 
+	      mv {params.scratchdir}/eXpress/{params.sample}/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs 
 
 	      ## cleanup
 	      # rm -rf {params.scratchdir}/eXpress/{params.sample}/
