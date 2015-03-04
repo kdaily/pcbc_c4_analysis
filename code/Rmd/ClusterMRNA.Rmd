@@ -1,0 +1,37 @@
+---
+title: "Clustering mRNA samples"
+author: "Kenneth Daily"
+date: "3/4/2015"
+output: html_document
+---
+
+```{r}
+library(cluster)
+library(ggplot2)
+
+countMat2 <- read.delim("DESeq2_rlog.csv", sep=",", check.names=FALSE)
+
+rownames(countMat2) <- countMat2$ID
+countMat2$ID <- NULL
+
+clusterRes <- clara(x=t(countMat2), k=2)
+
+hc <- hclust(clusterRes)
+hcdata <- dendro_data(hc, type="rectangle")
+```
+
+```{r}
+p <- ggplot() + 
+  geom_segment(data=segment(hcdata), aes(x=x, y=y, xend=xend, yend=yend)) +
+  geom_text(data=label(hcdata), aes(x=x, y=y, label=label, hjust=0, angle=270, color=metadata[match(colnames(countMat2), metadata$UID), "pass_qc"]), size=3) +
+  theme_bw() + theme(legend.position="top") + scale_y_reverse(expand=c(0.4, 0))
+p
+```
+
+```{r, echo=FALSE}
+p <- ggdendrogram(hc)
+p <- p + geom_text(data=label(hcdata), aes(x=x, y=y, label=label, hjust=0, angle=270, color=metadata[match(colnames(countMat2), metadata$UID), "pass_qc"]), size=3) +
+  theme(legend.position="top")
+
+p
+```
