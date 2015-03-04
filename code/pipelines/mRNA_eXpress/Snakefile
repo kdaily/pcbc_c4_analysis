@@ -60,19 +60,26 @@ rule bowtie_express:
     params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',fastqdir=FASTQ_DIR,synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 6
     shell: """## setup
-	      mkdir -p {params.scratchdir}/eXpress/{params.sample} ; \
+	      mkdir -p {params.scratchdir}/{params.sample}/eXpress/ ; \
+	      mkdir -p {params.scratchdir}/{params.sample}/fastq/ ; \
+	      
+              # Get files from synapse
+              pushd {params.scratchdir}/{params.sample}/fastq/ ; \
+              synapse get {params.synid}; \
+              popd ; \
 
 	      # Work
-	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.fastqdir}/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/eXpress/{params.sample} {params.target_file} ; \
+	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
 	      
 	      # Save
-	      mv {params.scratchdir}/eXpress/{params.sample}/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs 
-	      mv {params.scratchdir}/eXpress/{params.sample}/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs 
+	      mv {params.scratchdir}/{params.sample}/eXpress/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs 
+	      mv {params.scratchdir}/{params.sample}/eXpress/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs 
 
 	      ## cleanup
-	      # rm -rf {params.scratchdir}/eXpress/{params.sample}/
+	      # rm -rf {params.scratchdir}/{params.sample}/
 	      
 	      ## Synapse stuff here
 	      source {params.python2virtenv}; \
+              
     	      deactivate ; \
            """
