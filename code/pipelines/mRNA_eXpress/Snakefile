@@ -6,10 +6,10 @@ import os
 import csv
 
 # For running synapse client, which requires python 2
-PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2.7/bin/activate"
+PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-SAMPLE_FILE = SAMPLE_FILE
+# SAMPLE_FILE = SAMPLE_FILE
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
@@ -56,29 +56,25 @@ rule all:
 rule bowtie_express:
     input: './input/samples/{sample}.txt'
     output: './output/eXpress/ucsc/{sample}_results.xprs', 
-    params: batch='-l nodes=1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
-    threads: 6
+    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
+    threads: 8
     shell: """## setup
 	      mkdir -p {params.scratchdir}/{params.sample}/eXpress/ ; \
 	      mkdir -p {params.scratchdir}/{params.sample}/fastq/ ; \
 	      
               # Get files from synapse
-              pushd {params.scratchdir}/{params.sample}/fastq/ ; \
-              synapse get {params.synid}; \
-              popd ; \
-
+	      source {params.python2virtenv}; \
+              synapse get {params.synid} --downloadLocation {params.scratchdir}/{params.sample}/fastq/ ; \
+    	      deactivate ; \
+	      
 	      # Work
-	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
+	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
 	      
 	      # Save
 	      mv {params.scratchdir}/{params.sample}/eXpress/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs 
 	      mv {params.scratchdir}/{params.sample}/eXpress/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs 
-
-	      ## cleanup
-	      # rm -rf {params.scratchdir}/{params.sample}/
 	      
-	      ## Synapse stuff here
-	      source {params.python2virtenv}; \
-              
-    	      deactivate ; \
+	      ## cleanup
+	      rm -rf {params.scratchdir}/{params.sample}/ #fastq/{params.filename}
+	      
            """
