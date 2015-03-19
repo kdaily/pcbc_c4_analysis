@@ -3,9 +3,11 @@ Quality Control Filtering and Normalization of methylation C4 data
 
 Load the necessary libraries 
 ```{r, message=FALSE, warning=FALSE} 
-library(synapseClient)
 library(minfi)
 library(lumi)
+library(rGithubClient)
+
+library(synapseClient)
 synapseLogin()
 
 METHYLATIONMETA_ID <-'syn3156828'
@@ -34,6 +36,9 @@ fileList$prettyName <- gsub("_Red.*", "", fileList$name, perl=TRUE)
 fileList$prettyName <- gsub("_Grn.*", "", fileList$prettyName, perl=TRUE)
 
 metaTbl <- fileList
+metaTbl$name <- NULL
+metaTbl$id <- NULL
+metaTbl  <- unique(metaTbl)
 
 CELLMETA_ID <- "syn2767694"
 cellTable <- synTableQuery(sprintf("select * from %s", CELLMETA_ID))
@@ -42,7 +47,7 @@ cellTbl <- cellTable@values
 meta <- merge(metaTbl, cellTbl, by="C4_Cell_Line_ID")
 rownames(meta) <- meta$prettyName
 
-idx <- match(colnames(RGSet), meta$prettyName)
+idx <- match(colnames(RGSet), rownames(meta))
 pData(RGSet)<-meta[idx,]
 meta <- pData(RGSet)
 ```
@@ -85,9 +90,12 @@ beta <- getBeta(gRatioSet.quantile)
 
 These samples were removed:
 
-```{r}
+```{r, echo=FALSE}
 removed <- setdiff(colnames(RGSet), colnames(gRatioSet.quantile))
-subset(pData(RGSet), prettyName %in% removed, c("UID", "prettyName", "C4_Cell_Line_ID", "Diffname_short"))
+
+printCols <- c("UID", "C4_Cell_Line_ID", "Diffname_short")
+
+pData(RGSet)[removed, printCols]
 ```
 
 ### Review the quality of the normalized data with PCA and clustering
@@ -106,8 +114,10 @@ plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRat
 ### Store the normalized dataset in Synapse
 
 ```{r}
+repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
+script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
+
 write.table(beta, file='C4Meth450.tsv', col.names=NA,  sep='\t')
 file <- File('C4Meth450.tsv', parentId='syn1773109', name='Normalized Methylation calls')
-data = synStore(file, used=("syn2653626"), executed=(script))
+data <- synStore(file, used=fileList$id, executed=(script))
 ```
-
