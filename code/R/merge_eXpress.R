@@ -41,13 +41,13 @@ effCountsFile <- File("eXpress_eff_counts.csv", parentId="syn3270268",
                       annotations=list(fileType="csv", dataType="mRNA"))
 effCountsFile <- synStore(effCountsFile)
 
-tpm <- cast(pp1, target_id ~ .id, value.var="tpm")
-write.csv(tmp, "eXpress_tpm.csv", row.names=FALSE)
+tpm <- dcast(pp1, target_id ~ .id, value.var="tpm")
+write.csv(tpm, "eXpress_tpm.csv", row.names=FALSE)
 tpmFile <- File("eXpress_tpm.csv", parentId="syn3270268",
                 annotations=list(fileType="csv", dataType="mRNA"))
 tpmFile <- synStore(tpmFile)
 
-fpkm <- cast(pp1, target_id ~ .id, value.var="fpkm")
+fpkm <- dcast(pp1, target_id ~ .id, value.var="fpkm")
 write.csv(fpkm, "eXpress_fpkm.csv", row.names=FALSE)
 fpkmFile <- File("eXpress_fpkm.csv", parentId="syn3270268",
                 annotations=list(fileType="csv", dataType="mRNA"))
