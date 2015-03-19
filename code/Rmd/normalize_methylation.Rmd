@@ -1,0 +1,82 @@
+Quality Control Filtering and Normalization of methylation C4 data
+===================================================================
+
+Load the necessary libraries 
+```{r, message=FALSE, warning=FALSE} 
+library(synapseClient)
+library(minfi)
+library(lumi)
+METHYLATIONMETA_ID <-'syn2677043'
+synapseLogin()
+```
+
+### Find and download all of the idat files in Synapse 
+```{r downloadChunk, cache=TRUE}
+files <- synQuery('select id, name from entity where parentId=="syn2653626"')
+files <- files[files$entity.id!='syn2654330',]  #Remove array description file
+#files <- lapply(files$entity.id, function (x) synGet(x, downloadLocation=getwd()))
+```
+
+Load the methylation data an add the metadata
+```{r readChunk, cache=TRUE, dependson="downloadChunk"}
+RGSet <- read.450k.exp(base = getwd())
+meta <- read.delim(synGet(METHYLATIONMETA_ID)@filePath, header=T, row.names=1)
+idx = match(colnames(RGSet), meta$File)
+pData(RGSet)<-meta[idx,]
+meta <- pData(RGSet)
+```
+
+
+Filter out the data sets that are not public and remove poor quality cell-lines.  Specicically SC12-040 has a problematic karyotype.
+```{r filterChunk, cache=TRUE, dependson="downloadChunk"}
+idx = (pData(RGSet)$Public.=='yes') & (meta$C4.Cell.Line.ID!='SC12-040')
+RGSet <- RGSet[,idx]
+```
+
+### Compute methylated signals and observe the sample qualities
+```{r plot_qualityChunk, fig.width=7, fig.height=6, cache=TRUE, dependson="filterChunk"}
+MSet <- preprocessRaw(RGSet)
+#Plot quality for datasets
+qc <- getQC(MSet)
+plotQC(qc)
+
+#look at detection level per sample
+detP <- detectionP(RGSet)
+failed <- detP > 0.01
+plot(as.factor(pData(RGSet)$Array), colMeans(failed), main='Mean Failure Rate per Sample', xlab='Array', ylab='mean # of probes with detection p value >0.01')
+```
+
+There are `r sum(rowMeans(failed)>0.05)` probes with detection p value >0.01 in >5% of samples.  Also it is clear that array 6264488096 has issues along with other samples.
+
+### Perform quantile normalization and filter out these samples with low qc metrics.
+```{r normalizeChunk, cache=TRUE, dependson="filterChunk"}
+gRatioSet.quantile <- preprocessQuantile(RGSet, fixOutliers = TRUE,
+                                         removeBadSamples = TRUE, badSampleCutoff = 10.5,
+                                         quantileNormalize = TRUE, stratified = TRUE,
+                                         mergeManifest = FALSE, sex = NULL)
+beta <- getBeta(gRatioSet.quantile)
+```
+
+### Review the quality of the normalized data with PCA and clustering
+```{r, fig.width=9}
+#sub-sample the large matrix
+smaller <-beta[sample(nrow(gRatioSet.quantile),10000), ]
+#Perform PCA and plot color based on 
+plotSampleRelation(smaller, method='mds', cv.Th=0, color=pData(gRatioSet.quantile)$Diffname.short)
+plotSampleRelation(smaller, method='cluster', cv.Th=0, cex=.9)
+#The second PC corresponds to gender
+plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRatioSet.quantile)$Gender), dimension=c(2,3))
+#The third PC is somewhat related to lab of origin
+plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRatioSet.quantile)$originating.lab), dimension=c(3,4))
+```
+
+### Store the normalized dataset in Synapse along with this code
+
+```{r}
+write.table(beta, file='C4Meth450.tsv', col.names=NA,  sep='\t')
+script <- synStore(File('normalize_methylation.Rmd', parentId='syn2246673', name='normalize_methylation'))
+file <- File('C4Meth450.tsv', parentId='syn1773109', name='Summarized Methylation calls')
+data = synStore(file, used=("syn2653626"), executed=(script))
+```
+
+
