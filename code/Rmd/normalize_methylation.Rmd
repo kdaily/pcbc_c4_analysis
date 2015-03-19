@@ -6,20 +6,23 @@ Load the necessary libraries
 library(synapseClient)
 library(minfi)
 library(lumi)
-METHYLATIONMETA_ID <-'syn2677043'
 synapseLogin()
+
+METHYLATIONMETA_ID <-'syn3156828'
 ```
 
 ### Find and download all of the idat files in Synapse 
 ```{r downloadChunk, cache=TRUE}
-files <- synQuery('select id, name from entity where parentId=="syn2653626"')
-files <- files[files$entity.id!='syn2654330',]  #Remove array description file
-#files <- lapply(files$entity.id, function (x) synGet(x, downloadLocation=getwd()))
+files <- synQuery('select id, name from entity where parentId=="syn2653626" and fileType=="idat"')
+
+dataDir <- "/home/rstudio/data"
+files <- lapply(files$entity.id, 
+                function (x) synGet(x, downloadLocation=dataDir))
 ```
 
 Load the methylation data an add the metadata
 ```{r readChunk, cache=TRUE, dependson="downloadChunk"}
-RGSet <- read.450k.exp(base = getwd())
+RGSet <- read.450k.exp(base = dataDir)
 meta <- read.delim(synGet(METHYLATIONMETA_ID)@filePath, header=T, row.names=1)
 idx = match(colnames(RGSet), meta$File)
 pData(RGSet)<-meta[idx,]
@@ -78,5 +81,4 @@ script <- synStore(File('normalize_methylation.Rmd', parentId='syn2246673', name
 file <- File('C4Meth450.tsv', parentId='syn1773109', name='Summarized Methylation calls')
 data = synStore(file, used=("syn2653626"), executed=(script))
 ```
-
 
