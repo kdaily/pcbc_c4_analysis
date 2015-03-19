@@ -118,6 +118,6 @@ repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
 script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
 
 write.table(beta, file='C4Meth450.tsv', col.names=NA,  sep='\t')
-file <- File('C4Meth450.tsv', parentId='syn1773109', name='Normalized Methylation calls')
+file <- File('C4Meth450.tsv', parentId='syn2813225', name='Normalized methylation calls', annotations=list(dataType="methylation", fileType=""))
 data <- synStore(file, used=fileList$id, executed=(script))
 ```
