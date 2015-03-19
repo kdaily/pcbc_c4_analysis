@@ -13,18 +13,35 @@ METHYLATIONMETA_ID <-'syn3156828'
 
 ### Find and download all of the idat files in Synapse 
 ```{r downloadChunk, cache=TRUE}
-files <- synQuery('select id, name from entity where parentId=="syn2653626" and fileType=="idat"')
+fileList <- synQuery('select id, name,C4_Cell_Line_ID,Diffname_short,BeadChip,Array_position,Row,Column,UID from file where parentId=="syn2653626" and fileType=="idat"')
+colnames(fileList) <- gsub("file\\.", "", colnames(fileList))
 
-dataDir <- "/home/rstudio/data"
-files <- lapply(files$entity.id, 
+dataDir <- getwd()
+files <- lapply(fileList$id, 
                 function (x) synGet(x, downloadLocation=dataDir))
 ```
 
-Load the methylation data an add the metadata
+Load the methylation data
 ```{r readChunk, cache=TRUE, dependson="downloadChunk"}
 RGSet <- read.450k.exp(base = dataDir)
-meta <- read.delim(synGet(METHYLATIONMETA_ID)@filePath, header=T, row.names=1)
-idx = match(colnames(RGSet), meta$File)
+```
+
+Add the metadata (TEMP FIX)
+```{r}
+# metaTable <- synTableQuery(sprintf("select * from %s", METHYLATIONMETA_ID))
+# metaTbl <- metaTable@values
+fileList$prettyName <- gsub("_Red.*", "", fileList$name, perl=TRUE)
+fileList$prettyName <- gsub("_Grn.*", "", fileList$prettyName, perl=TRUE)
+
+metaTbl <- fileList
+
+CELLMETA_ID <- "syn2767694"
+cellTable <- synTableQuery(sprintf("select * from %s", CELLMETA_ID))
+cellTbl <- cellTable@values
+
+meta <- merge(metaTbl, cellTbl, by="C4_Cell_Line_ID")
+
+idx = match(colnames(RGSet), meta$prettyName)
 pData(RGSet)<-meta[idx,]
 meta <- pData(RGSet)
 ```
@@ -32,7 +49,7 @@ meta <- pData(RGSet)
 
 Filter out the data sets that are not public and remove poor quality cell-lines.  Specicically SC12-040 has a problematic karyotype.
 ```{r filterChunk, cache=TRUE, dependson="downloadChunk"}
-idx = (pData(RGSet)$Public.=='yes') & (meta$C4.Cell.Line.ID!='SC12-040')
+idx = (pData(RGSet)$public) & (pData(RGSet)$C4_Cell_Line_ID!='SC12-040')
 RGSet <- RGSet[,idx]
 ```
 
@@ -54,9 +71,12 @@ There are `r sum(rowMeans(failed)>0.05)` probes with detection p value >0.01 in 
 ### Perform quantile normalization and filter out these samples with low qc metrics.
 ```{r normalizeChunk, cache=TRUE, dependson="filterChunk"}
 gRatioSet.quantile <- preprocessQuantile(RGSet, fixOutliers = TRUE,
-                                         removeBadSamples = TRUE, badSampleCutoff = 10.5,
-                                         quantileNormalize = TRUE, stratified = TRUE,
-                                         mergeManifest = FALSE, sex = NULL)
+                                         removeBadSamples = TRUE,
+                                         badSampleCutoff = 10.5,
+                                         quantileNormalize = TRUE,
+                                         stratified = TRUE,
+                                         mergeManifest = FALSE, 
+                                         sex = NULL)
 beta <- getBeta(gRatioSet.quantile)
 ```
 
