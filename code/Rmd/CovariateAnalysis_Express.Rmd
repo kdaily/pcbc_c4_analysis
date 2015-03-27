@@ -1,5 +1,5 @@
 ---
-title: "Covariate Analysis"
+title: "Covariate Analysis using eXpress aligned mRNA"
 author: "Thanneer Perumal"
 date: "03/26/2015"
 output: html_document
@@ -20,12 +20,11 @@ library('gplots')
 library('vcd')
 library('psych')
 library('erer')
-
 ## Requires ggdendro
 devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
 
 # devtools::source_gist('2866ef5c0aeb64d265ed')
-# knit2synapse(file = "./CovariateAnalysis.Rmd", owner = 'syn3382512', wikiName = "Covariate Analysis",overwrite=T)
+# knit2synapse(file = "./CovariateAnalysis_Express.Rmd", owner = 'syn3382563', wikiName = "Covariate Analysis Express",overwrite=T)
 
 synapseLogin()
 
@@ -46,7 +45,7 @@ knitr::opts_chunk$set(
 
 ```{r setup}
 # Input Parameters
-COUNT_ID = 'syn3164570';
+COUNT_ID = 'syn3354716';
 METADATA_ID = 'syn3156503';
 OUTLIERS_ID = 'NULL';
 
@@ -68,7 +67,7 @@ Obtain count matrix and metadata from synapse.
 # Get count matrix
 COUNT_OBJ = synGet(COUNT_ID);
 ALL_USED_IDs = list(COUNT_OBJ$properties$id);
-COUNT = read.table(getFileLocation(COUNT_OBJ),header=T,row.names=1, check.names=FALSE)
+COUNT = read.table(getFileLocation(COUNT_OBJ),sep=',',header=T,row.names=1, check.names=FALSE)
 
 # Get metadata
 METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '))
@@ -246,11 +245,11 @@ DIFF.EXP$adj.P.Val <- data.frame(row.names = rownames(VOOM.ADJUSTED.GENE_EXPRESS
 for (i in CONT.NAMES){
   tmp <- topTable(FIT.CONTRAST, coef=i, number=dim(VOOM.ADJUSTED.GENE_EXPRESSION$E)[1])
   colNames <- gsub('Diffname_short','',gsub('Intercept','DE',i))
-  DIFF.EXP$logFC[,colNames] <- tmp[rownames(DIFF.EXP$logFC),'logFC']
-  DIFF.EXP$adj.P.Val[,colNames] <- tmp[rownames(DIFF.EXP$adj.P.Val),'adj.P.Val']
+  DIFF.EXP$logFC[,paste(colNames,'logFC',sep='-')] <- tmp[rownames(DIFF.EXP$logFC),'logFC']
+  DIFF.EXP$adj.P.Val[,paste(colNames,'adj.P.Val',sep='-')] <- tmp[rownames(DIFF.EXP$adj.P.Val),'adj.P.Val']
 }
 tmp <- cbind(DIFF.EXP$logFC,DIFF.EXP$adj.P.Val)
-write.table(DIFF.EXP,file='./DifferentialExpression_DiffnameShort.txt',sep='\t',row.names=T,col.names=T,quote=F)
+write.table(DIFF.EXP,file='./DifferentialExpression_DiffnameShort_Express.txt',sep='\t',row.names=T,col.names=T,quote=F)
 
 # Get number of significantly differentialy expressed genes with adj.P.Val <= 0.01 and abs(logFC) >= 2
 SIG.EXPR <- DIFF.EXP$adj.P.Val<=0.01 & abs(DIFF.EXP$logFC) >= 2
@@ -264,9 +263,9 @@ print(sapply(SIG.GSETS,length))
 
 ```{r synapsestore}
 if (SYNAPSE_STORE){
-  COVARIATES_CODE <- File('./CovariateAnalysis.Rmd',name = 'Covariate Analysis',parentId = parentId)
-  COVARIATES_CODE <- synStore(COVARIATES_CODE, used = c(COUNT_OBJ$properties$id,METADATA_OBJ@schema),activityName='Covariate Analysis', executed='https://github.com/th1vairam/pcbc_c4_analysis/blob/cov_anal/code/Rmd/CovariateAnalysis.Rmd')
-  DE <- File('./DifferentialExpression_DiffnameShort.txt',name = 'Differential Expression DiffnameShort',parentId = parentId)
-  DE <- synStore(DE, used = c(COUNT_OBJ$properties$id,METADATA_OBJ@schema),activityName='Differential Analysis', executed=COVARIATES_CODE)
+  COVARIATES_CODE <- File('./CovariateAnalysis_Express.Rmd',name = 'Covariate Analysis Express',parentId = parentId)
+  COVARIATES_CODE <- synStore(COVARIATES_CODE, used = c(COUNT_OBJ$properties$id,METADATA_OBJ@schema),activityName='Covariate Analysis from eXpress', executed='https://github.com/th1vairam/pcbc_c4_analysis/blob/cov_anal/code/Rmd/CovariateAnalysis_Express.Rmd')
+  DE <- File('./DifferentialExpression_DiffnameShort_Express.txt',name = 'Differential Expression DiffnameShort Express',parentId = parentId)
+  DE <- synStore(DE, used = c(COUNT_OBJ$properties$id,METADATA_OBJ@schema),activityName='Differential Expression Analysis Express', executed=COVARIATES_CODE)
 }
 ```
