@@ -1,7 +1,10 @@
 ## Collapse eXpress transcript level values to gene level
-
+library(rGithubClient)
+library(synapseClient)
 library(data.table)
 library(dplyr)
+
+synapseLogin()
 
 collapse_eXpress <- function(dataID, mappingData) {
   expressFile <- synGet(dataID)
