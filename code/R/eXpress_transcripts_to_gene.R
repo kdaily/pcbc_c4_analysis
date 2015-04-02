@@ -27,7 +27,7 @@ repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="eXpress_synaps
 thisFile <- getPermlink(repo, "code/R/eXpress_transcripts_to_gene.R")
 
 ## Set up annotations
-annots <- list(dataType="mRNA", fileType="matrix")
+annots <- list(dataType="mRNA", fileType="matrix", expressionLevel="gene")
 
 tpmID <- "syn3354728"
 tpmData <- collapse_eXpress(tpmID, mappingData)
