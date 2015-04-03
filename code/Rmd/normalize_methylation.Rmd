@@ -117,9 +117,9 @@ script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
 write.table(beta, file='C4Meth450.tsv', quote=FALSE, sep='\t')
 file <- File('C4Meth450.tsv', parentId='syn2813225', 
              name='Normalized methylation calls')
-synSetAnnotations(file) <- list(dataType="methylation")
+synSetAnnotations(file) <- list(dataType="methylation", fileType="matrix")
 
-usedFiles <- subset(fileList, prettyName %in% sampleNames(RGSet))
+usedFiles <- subset(fileList, UID %in% sampleNames(RGSet))
 act <- Activity(name="Normalize", 
                 description="Normalize methylation using minfi and lumi", 
                 used=usedFiles$id, executed=(script))
