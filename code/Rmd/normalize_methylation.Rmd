@@ -114,8 +114,9 @@ plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRat
 repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
 script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
 
-write.table(beta, file='C4Meth450.tsv', col.names=NA,  sep='\t')
-file <- File('C4Meth450.tsv', parentId='syn2813225', name='Normalized methylation calls')
+write.table(beta, file='C4Meth450.tsv', quote=FALSE, sep='\t')
+file <- File('C4Meth450.tsv', parentId='syn2813225', 
+             name='Normalized methylation calls')
 synSetAnnotations(file) <- list(dataType="methylation")
 
 usedFiles <- subset(fileList, prettyName %in% sampleNames(RGSet))
