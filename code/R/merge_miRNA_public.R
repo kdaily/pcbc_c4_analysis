@@ -1,8 +1,6 @@
 # Merge miRNA files from mirExpress
 
 library(data.table)
-library(readr)
-library(doMC)
 library(plyr)
 library(dplyr)
 library(reshape2)
