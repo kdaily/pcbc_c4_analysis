@@ -8,8 +8,13 @@ library(synapseClient)
 library(rGithubClient)
 synapseLogin()
 
+# Get the metadata
+metaSchema <- synGet('syn3219876')
+metaTbl <- synTableQuery(paste("SELECT * FROM", metaSchema@properties$id))
+metadata <- metaTbl@values
+
 # Query for the files
-q <- "select name,id,UID FROM file WHERE projectId=='syn1773109' AND dataType=='miRNA' AND fileType=='expr'"
+q <- "select id,UID FROM file WHERE projectId=='syn1773109' AND dataType=='miRNA' AND fileType=='expr'"
 qr <- synQuery(q, blockSize=500)
 res <- qr$collectAll()
 synIds <- res$file.id
@@ -21,20 +26,21 @@ names(objs) <- lapply(objs, function(x) annotations(x)$UID)
 # Get the file names
 listnames <- llply(objs, getFileLocation, .progress='text')
 
-# Read all the files in, only specific columns
-# Merge them into a long data frame
+# Read all the files in, merge them into a long data frame
 pp1 <- ldply(listnames, .id=NA, .progress='text',
              fread, header=FALSE, sep="\t", 
              data.table=FALSE)
 
 pp1$UID <- names(listnames)[pp1$X1]
 pp1$X1 <- NULL
-colnames(pp1) <- c("target_id", "count", "UID")
-pp1 <- pp1[, c("UID", "target_id", "count")]
+colnames(pp1) <- c("mir", "count", "UID")
+pp1 <- pp1[, c("UID", "mir", "count")]
 
 ## Cast into wide data frames, one per measurement
-counts <- dcast(pp1, target_id ~ UID, value.var="count")
-write.csv(estCounts, "miRNA_counts.csv", row.names=FALSE)
-countsFile <- File("miRNA_counts.csv", parentId="syn3354743",
-                      annotations=list(fileType="matrix", dataType="miRNA"))
-countsFile <- synStore(countsFile, used=synIds)
+counts <- dcast(pp1, mir ~ UID, value.var="count")
+write.csv(counts, "miRNA_counts.csv", row.names=FALSE)
+countsFile <- File("miRNA_counts.csv", name="Summarized public and private miRNA calls",
+                   parentId="syn3255448", annotations=list(fileType="genomicMatrix", dataType="miRNA"))
+countsFile <- synStore(countsFile,
+                       used=c("syn2247164", "syn3223165"),
+                       executed="")
