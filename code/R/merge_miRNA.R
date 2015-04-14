@@ -39,8 +39,13 @@ pp1 <- pp1[, c("UID", "mir", "count")]
 ## Cast into wide data frames, one per measurement
 counts <- dcast(pp1, mir ~ UID, value.var="count")
 write.csv(counts, "miRNA_counts.csv", row.names=FALSE)
+
+repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="mergemirna")
+script <- getPermlink(repo, repositoryPath="code/R/merge_miRNA.R")
+
 countsFile <- File("miRNA_counts.csv", name="Summarized public and private miRNA calls",
                    parentId="syn3255448", annotations=list(fileType="genomicMatrix", dataType="miRNA"))
 countsFile <- synStore(countsFile,
                        used=c("syn2247164", "syn3223165"),
-                       executed="")
+                       executed=script)
+
