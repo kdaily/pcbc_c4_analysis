@@ -44,7 +44,7 @@ effCountData <- collapse_eXpress(effCountID, mappingData)
 write.csv(effCountData, "eXpress_eff_count_geneSymbol.csv", row.names=FALSE)
 f <- File("eXpress_eff_count_geneSymbol.csv", parentId="syn3354743")
 synSetAnnotations(f) <- annots
-generatedBy(resultFile) <- Activity(used=c(effCountID, mappingFile), 
+generatedBy(f) <- Activity(used=c(effCountID, mappingFile), 
                                     executed=thisFile,
                                     name="Sum", description="Sum over gene symbol")
 f <- synStore(f)
