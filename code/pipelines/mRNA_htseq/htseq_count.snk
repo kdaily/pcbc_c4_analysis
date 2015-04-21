@@ -65,7 +65,7 @@ rule synstore:
     params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE,bam_synid=get_synid
     threads: 8
     shell: """source {params.python2virtenv}; \
-              synapse -s store {input.htseq} --parentId syn2822494 --used {params.bam_synid} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
+              synapse -s store {input.htseq} --parentId syn3255455 --used {params.bam_synid} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
               deactivate
            """
 
