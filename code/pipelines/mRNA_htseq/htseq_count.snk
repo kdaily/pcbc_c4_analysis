@@ -61,7 +61,7 @@ rule synstore:
     """
     
     input: htseq='output/{sample}.txt'
-    output: 'output/writesynapse/{prefix}.txt'
+    output: 'output/writesynapse/{sample}.txt'
     params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE,bam_synid=get_synid
     threads: 8
     shell: """source {params.python2virtenv}; \
