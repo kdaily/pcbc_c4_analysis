@@ -4,6 +4,7 @@
 
 import os
 import sys
+import csv
 
 # For running synapse client, which requires python 2
 PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
