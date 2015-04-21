@@ -1,0 +1,54 @@
+"""Run htseq-count on PCBC data.
+
+"""
+
+import os
+
+# For running synapse client, which requires python 2
+PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
+
+BAMDIR="input/bam2"
+GTFFILE="input/gencode.v17.annotation_nochr.gtf"
+
+# Generally, this file's location
+SCRIPTFILE="DESeq.snk"
+
+def getSamples(inputdir, suffix=".bam"):
+    filelist = os.listdir(inputdir)
+    filelist = filter(lambda x: x.endswith(suffix), filelist)
+    samplenames = map(lambda x: x.split(suffix)[0], filelist)
+    return list(samplenames)
+
+SAMPLES = getSamples(BAMDIR, suffix=".bam")
+
+rule all:
+     input: expand('output/writesynapse/{sample}.txt', sample=SAMPLES)
+     
+rule synstore:
+    """Stores files in synapse with provenance.
+
+    Since this doesn't return anything, write the stderr to a file.
+
+    """
+    
+    input: htseq='output/{prefix}.txt', bam='%s/{prefix}.bam' % (BAMDIR,)
+    output: 'output/writesynapse/{prefix}.txt'
+    params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE
+    threads: 8
+    shell: """source {params.python2virtenv}; \
+              synapse -s store {input.htseq} --parentId syn2822494 --used {input.bam} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
+              deactivate
+           """
+
+rule htseq:
+    """Run htseq
+
+    """
+
+    input: '%s/{prefix}.bam' % (BAMDIR,)
+    output: 'output/{prefix}.txt'
+    params: gtffile=GTFFILE, python2virtenv=PY2VIRTENV
+    shell: """source {params.python2virtenv}; \
+    	      htseq-count --stranded=no -f bam -t exon -i gene_id {input} {params.gtffile} 1> {output} ; \
+	      deactivate
+	   """
