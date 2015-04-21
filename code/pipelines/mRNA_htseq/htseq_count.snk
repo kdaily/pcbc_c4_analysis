@@ -9,7 +9,6 @@ import csv
 # For running synapse client, which requires python 2
 PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
 
-BAMDIR = "input/bam2"
 GTFFILE = "input/gencode.v17.annotation_nochr.gtf"
 
 # Generally, this file's location
@@ -76,7 +75,6 @@ rule htseq_count:
     """
 
     input: './input/samples/{sample}.txt'
-    # input: '%s/{prefix}.bam' % (BAMDIR,)
     output: 'output/count/{sample}.txt'
     params: gtffile=GTFFILE, python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,scratchdir="/tmp"
     shell: """source {params.python2virtenv}; \
