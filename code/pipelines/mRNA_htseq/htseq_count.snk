@@ -34,7 +34,8 @@ def get_synid(wildcards):
     try:
         synid = SAMPLE_DICT[wildcards[0]]['id']
     except Exception as e:
-        print(e)
+        print("Error getting synid")
+	print(e)
         print(wildcards)
         raise(e)
     
@@ -60,10 +61,10 @@ rule synstore:
 
     """
     
-    input: htseq='output/{sample}.txt'
+    input: htseq='output/count/{sample}.txt'
     output: 'output/writesynapse/{sample}.txt'
     params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE,bam_synid=get_synid
-    threads: 8
+    threads: 1
     shell: """source {params.python2virtenv}; \
               synapse -s store {input.htseq} --parentId syn3255455 --used {params.bam_synid} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
               deactivate
@@ -76,7 +77,7 @@ rule htseq_count:
 
     input: './input/samples/{sample}.txt'
     # input: '%s/{prefix}.bam' % (BAMDIR,)
-    output: 'output/{sample}.txt'
+    output: 'output/count/{sample}.txt'
     params: gtffile=GTFFILE, python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,scratchdir="/tmp"
     shell: """source {params.python2virtenv}; \
 
