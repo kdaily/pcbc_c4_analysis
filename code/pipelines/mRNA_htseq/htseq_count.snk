@@ -3,26 +3,59 @@
 """
 
 import os
+import sys
+
+from snakemake.utils import read_job_properties
+
+jobscript = sys.argv[1]
+job_properties = read_job_properties(jobscript)
 
 # For running synapse client, which requires python 2
 PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
 
-BAMDIR="input/bam2"
-GTFFILE="input/gencode.v17.annotation_nochr.gtf"
+BAMDIR = "input/bam2"
+GTFFILE = "input/gencode.v17.annotation_nochr.gtf"
 
-# Generally, this file's location
-SCRIPTFILE="DESeq.snk"
+# Generally, this file's location (getting it from running snakemake)
+SCRIPTFILE = jobscript
 
-def getSamples(inputdir, suffix=".bam"):
-    filelist = os.listdir(inputdir)
-    filelist = filter(lambda x: x.endswith(suffix), filelist)
-    samplenames = map(lambda x: x.split(suffix)[0], filelist)
-    return list(samplenames)
+SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
+SAMPLE_FILE = SAMPLE_FILE[:2]
 
-SAMPLES = getSamples(BAMDIR, suffix=".bam")
+SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
+
+def get_filename(wildcards):
+    try:
+        filename = SAMPLE_DICT[wildcards[0]]['fileName']
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return filename
+
+def get_synid(wildcards):
+    try:
+        synid = SAMPLE_DICT[wildcards[0]]['id']
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return synid
+
+def get_sample_info(wildcards):
+    try:
+        info = SAMPLE_DICT[wildcards[0]]
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return info
 
 rule all:
-     input: expand('output/writesynapse/{sample}.txt', sample=SAMPLES)
+     input: expand('output/writesynapse/{sample}.txt', sample=sample=SAMPLE_DICT.keys())
      
 rule synstore:
     """Stores files in synapse with provenance.
@@ -31,24 +64,34 @@ rule synstore:
 
     """
     
-    input: htseq='output/{prefix}.txt', bam='%s/{prefix}.bam' % (BAMDIR,)
+    input: htseq='output/{sample}.txt'
     output: 'output/writesynapse/{prefix}.txt'
-    params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE
+    params: python2virtenv=PY2VIRTENV,gtffile=GTFFILE,scriptfile=SCRIPTFILE,bam_synid=get_synid
     threads: 8
     shell: """source {params.python2virtenv}; \
-              synapse -s store {input.htseq} --parentId syn2822494 --used {input.bam} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
+              synapse -s store {input.htseq} --parentId syn2822494 --used {params.bam_synid} {params.gtffile} --executed {params.scriptfile} &> {output} ; \
               deactivate
            """
 
-rule htseq:
-    """Run htseq
+rule htseq_count:
+    """Run htseq-count.
 
     """
 
-    input: '%s/{prefix}.bam' % (BAMDIR,)
-    output: 'output/{prefix}.txt'
-    params: gtffile=GTFFILE, python2virtenv=PY2VIRTENV
+    input: './input/samples/{sample}.txt'
+    # input: '%s/{prefix}.bam' % (BAMDIR,)
+    output: 'output/{sample}.txt'
+    params: gtffile=GTFFILE, python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,scratchdir="/tmp"
     shell: """source {params.python2virtenv}; \
-    	      htseq-count --stranded=no -f bam -t exon -i gene_id {input} {params.gtffile} 1> {output} ; \
+
+	      mkdir -p {params.scratchdir}/{params.sample}/bam/ ; \
+
+              synapse get {params.synid} --downloadLocation {params.scratchdir}/{params.sample}/bam/ ; \
+
+    	      htseq-count --stranded=no -f bam -t exon -i gene_id {params.scratchdir}/{params.sample}/bam/{params.filename} {params.gtffile} 1> {output} ; \
+
+	      ## cleanup
+	      rm -rf {params.scratchdir}/{params.sample}/ ; \
+
 	      deactivate
 	   """
