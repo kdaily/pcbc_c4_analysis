@@ -5,19 +5,14 @@
 import os
 import sys
 
-from snakemake.utils import read_job_properties
-
-jobscript = sys.argv[1]
-job_properties = read_job_properties(jobscript)
-
 # For running synapse client, which requires python 2
 PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
 
 BAMDIR = "input/bam2"
 GTFFILE = "input/gencode.v17.annotation_nochr.gtf"
 
-# Generally, this file's location (getting it from running snakemake)
-SCRIPTFILE = jobscript
+# Generally, this file's location
+SCRIPTFILE = os.path.dirname(__file__)
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_FILE = SAMPLE_FILE[:2]
