@@ -5,7 +5,7 @@ library(plyr)
 
 synapseLogin()
 
-newq <- "select id,UID from file where projectId=='syn1773109' AND dataType=='mRNA' AND fileType=='bam'"
+newq <- "select id,UID from file where projectId=='syn1773109' AND dataType=='mRNA' AND fileType=='bam' AND fileSubType=='mapped'"
 newRes <- synapseQuery(newq)
 colnames(newRes) <- gsub(".*\\.", "", colnames(newRes))
 
