@@ -7,6 +7,7 @@ import sys
 import csv
 
 # For running synapse client, which requires python 2
+# Requires https://github.com/kdaily/synapsePythonClient/tree/getlocation/synapseclient
 PY2VIRTENV = "/home/kdaily/.virtualenvs/python2/bin/activate"
 
 GTFFILE = "input/gencode.v17.annotation_nochr.gtf"
