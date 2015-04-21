@@ -55,7 +55,7 @@ def get_sample_info(wildcards):
     return info
 
 rule all:
-     input: expand('output/writesynapse/{sample}.txt', sample=sample=SAMPLE_DICT.keys())
+     input: expand('output/writesynapse/{sample}.txt', sample=SAMPLE_DICT.keys())
      
 rule synstore:
     """Stores files in synapse with provenance.
