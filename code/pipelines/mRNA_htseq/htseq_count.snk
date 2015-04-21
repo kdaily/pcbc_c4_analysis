@@ -13,7 +13,7 @@ BAMDIR = "input/bam2"
 GTFFILE = "input/gencode.v17.annotation_nochr.gtf"
 
 # Generally, this file's location
-SCRIPTFILE = os.path.dirname(__file__)
+SCRIPTFILE = workflow.snakefile
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
 SAMPLE_FILE = SAMPLE_FILE[:2]
