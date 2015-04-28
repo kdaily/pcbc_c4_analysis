@@ -41,6 +41,8 @@ pp1 <- pp1[, c("UID", "mir", "count")]
 
 ## Cast into wide data frames, one per measurement
 counts <- dcast(pp1, mir ~ UID, value.var="count")
+counts[is.na(counts)] <- 0
+
 write.csv(counts, "miRNA_counts.csv", row.names=FALSE)
 
 repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="mergemirna")
