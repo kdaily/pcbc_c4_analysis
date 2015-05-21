@@ -43,7 +43,9 @@ rule concat:
             d.to_csv(out, sep="\t", index=False)
 
 rule mergetxtassoc:
-    input: txt='./output/{contrast}-{geneset}.txt', assoc='./output/{contrast}-{geneset}-associations.tab'
+    input:
+        txt='./output/processed/{contrast}-{geneset}.txt',
+        assoc='./output/processed/{contrast}-{geneset}-associations.tab'
     output: merged='./output/merged/{contrast}-{geneset}.tsv'
     params: geneset='{geneset}', contrast='{contrast}'
     run:
@@ -59,7 +61,7 @@ rule mergetxtassoc:
 
 rule standardassoc:
     input: assoc='./input/{contrast}-{geneset}-associations.tab'
-    output: assoc='./output/{contrast}-{geneset}-associations.tab'
+    output: assoc='./output/processed/{contrast}-{geneset}-associations.tab'
     run:
         with open(output.assoc, 'w') as out:
             d = open(input.assoc)
@@ -77,7 +79,7 @@ rule standardassoc:
 
 rule removeheader:
     input: txt='./input/{contrast}-{geneset}.txt'
-    output: txt='./output/{contrast}-{geneset}.txt'
+    output: txt='./output/processed/{contrast}-{geneset}.txt'
     params: batch='-pe orte 1',scratchdir="/tmp"
     threads: 1
     run:
