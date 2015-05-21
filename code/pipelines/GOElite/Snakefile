@@ -1,0 +1,93 @@
+"""This only runs on belltown/sodo, a Sage Bionetworks cluster.
+
+"""
+
+import os
+import csv
+import glob
+import numpy as np
+import pandas as pd
+
+# # For running synapse client, which requires python 2
+# PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
+
+# Files are linked from
+# /external-data/DAT_114__PCBC_Data/mRNA/GO-Elite/GO_Elite_output/GO-Elite_results/CompleteResults/ORA/archived-20150520-045614
+
+INPUT_DIR = './input'
+
+INPUT_FILES = glob.glob("%s/*.txt" % INPUT_DIR)
+
+vars = list(map(lambda x: os.path.basename(x).split(".txt")[0].split("-"), INPUT_FILES))
+
+contrasts = set([x[0] for x in vars])
+
+# Not using all genesets b/c GO headers are different than the rest
+genesets = set([x[1] for x in vars if x[1] != 'GO'])
+
+rule all:
+    input:
+        './output/final/results.tsv'
+
+rule concat:
+    input: expand('./output/merged/{contrast}-{geneset}.tsv', contrast=contrasts, geneset=genesets)
+    output: './output/final/results.tsv'
+    run:
+        with open(output[0], 'w') as out:
+
+            d = pd.read_csv(input[0], sep="\t")
+
+            for infile in input[1:]:
+                d = d.append(pd.read_csv(infile, sep="\t"))
+
+            d.to_csv(out, sep="\t", index=False)
+
+rule mergetxtassoc:
+    input: txt='./output/{contrast}-{geneset}.txt', assoc='./output/{contrast}-{geneset}-associations.tab'
+    output: merged='./output/merged/{contrast}-{geneset}.tsv'
+    params: geneset='{geneset}', contrast='{contrast}'
+    run:
+        with open(output.merged, 'w') as out:
+            txt = pd.read_csv(input.txt, sep="\t")
+            assoc = pd.read_csv(input.assoc, sep="\t")
+            merged = pd.merge(left=txt, right=assoc, how="left", on="Gene-Set Name")
+
+            merged['geneset'] = [params.geneset] * merged.shape[0]
+            merged['contrast'] = [params.contrast] * merged.shape[0]
+
+            merged.to_csv(out, sep="\t", index=False)
+
+rule standardassoc:
+    input: assoc='./input/{contrast}-{geneset}-associations.tab'
+    output: assoc='./output/{contrast}-{geneset}-associations.tab'
+    run:
+        with open(output.assoc, 'w') as out:
+            d = open(input.assoc)
+
+            line = d.readline().strip()
+
+            c1, c2, c3 = line.split("\t")
+            line = "\t".join([c1, c2, "Gene-Set Name"])
+
+            print(line, file=out)
+
+            for row in d.readlines():
+                print(row.rstrip(), sep="", file=out)
+
+
+rule removeheader:
+    input: txt='./input/{contrast}-{geneset}.txt'
+    output: txt='./output/{contrast}-{geneset}.txt'
+    params: batch='-pe orte 1',scratchdir="/tmp"
+    threads: 1
+    run:
+        with open(output.txt, 'w') as out:
+            d = open(input.txt)
+
+            line = d.readline().strip()
+
+            while not line == "":
+                line = d.readline().strip()
+
+            for row in d.readlines():
+                print(row.rstrip(), sep="", file=out)
