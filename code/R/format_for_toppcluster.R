@@ -22,9 +22,6 @@ tolong <- function(x) {
 
 d2 <- ddply(d, .(Contrast.Names), tolong, .progress='text')
 
-# d2 <- d2 %>%
-#   mutate(Contrast.Names=str_replace_all(Contrast.Names, "_", ""))
-
 d2.up <- d2 %>% 
   filter(str_detect(Contrast.Names, "up"), !is.na(gene), gene != "") %>%
   select(gene, Contrast.Names)
