@@ -29,6 +29,7 @@ rule all:
     input:
         './output/final/results.tsv'
 
+# Concatenate all merged files together
 rule concat:
     input: expand('./output/merged/{contrast}-{geneset}.tsv', contrast=contrasts, geneset=genesets)
     output: './output/final/results.tsv'
@@ -42,6 +43,7 @@ rule concat:
 
             d.to_csv(out, sep="\t", index=False)
 
+# Merge the txt and association files together
 rule mergetxtassoc:
     input:
         txt='./output/processed/{contrast}-{geneset}.txt',
@@ -59,6 +61,7 @@ rule mergetxtassoc:
 
             merged.to_csv(out, sep="\t", index=False)
 
+# Process the association files, standardize the column names
 rule standardassoc:
     input: assoc='./input/{contrast}-{geneset}-associations.tab'
     output: assoc='./output/processed/{contrast}-{geneset}-associations.tab'
@@ -66,6 +69,7 @@ rule standardassoc:
         with open(output.assoc, 'w') as out:
             d = open(input.assoc)
 
+            # Header line is first; replace last column with 'Gene-Set Name'
             line = d.readline().strip()
 
             c1, c2, c3 = line.split("\t")
@@ -76,7 +80,7 @@ rule standardassoc:
             for row in d.readlines():
                 print(row.rstrip(), sep="", file=out)
 
-
+# Remove the header rows - after first blank line, data starts
 rule removeheader:
     input: txt='./input/{contrast}-{geneset}.txt'
     output: txt='./output/processed/{contrast}-{geneset}.txt'
