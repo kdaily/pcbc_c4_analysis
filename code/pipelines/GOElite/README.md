@@ -7,6 +7,8 @@ This requires [Python 3](https://www.python.org/downloads/release/python-343/).
 
 This pipeline:
 
-1. Standardizes the column names of the association files.
-2. Merges the txt and association files.
+1. Standardizes the column names of the association files and remove header lines from text files.
+2. Merge the text and association files.
 3. Concatenates the merged files.
+
+![rulegraph](rulegraph.png)
