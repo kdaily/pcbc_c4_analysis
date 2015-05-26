@@ -31,8 +31,10 @@ rule all:
 
 # Concatenate all merged files together
 rule concatenate_merged:
-    input: expand('./output/merged/{contrast}-{geneset}.tsv', contrast=contrasts, geneset=genesets)
-    output: './output/final/results.tsv'
+    input:
+        expand('./output/merged/{contrast}-{geneset}.tsv', contrast=contrasts, geneset=genesets)
+    output:
+        './output/final/results.tsv'
     run:
         with open(output[0], 'w') as out:
 
@@ -48,7 +50,8 @@ rule merge_txt_association:
     input:
         txt='./output/processed/{contrast}-{geneset}.txt',
         assoc='./output/processed/{contrast}-{geneset}-associations.tab'
-    output: merged='./output/merged/{contrast}-{geneset}.tsv'
+    output:
+        merged='./output/merged/{contrast}-{geneset}.tsv'
     params: geneset='{geneset}', contrast='{contrast}'
     run:
         with open(output.merged, 'w') as out:
@@ -63,8 +66,10 @@ rule merge_txt_association:
 
 # Process the association files, standardize the column names
 rule standardize_association:
-    input: assoc='./input/{contrast}-{geneset}-associations.tab'
-    output: assoc='./output/processed/{contrast}-{geneset}-associations.tab'
+    input:
+        assoc='./input/{contrast}-{geneset}-associations.tab'
+    output:
+        assoc='./output/processed/{contrast}-{geneset}-associations.tab'
     run:
         with open(output.assoc, 'w') as out:
             d = open(input.assoc)
@@ -82,8 +87,10 @@ rule standardize_association:
 
 # Remove the header rows - after first blank line, data starts
 rule remove_header:
-    input: txt='./input/{contrast}-{geneset}.txt'
-    output: txt='./output/processed/{contrast}-{geneset}.txt'
+    input:
+        txt='./input/{contrast}-{geneset}.txt'
+    output:
+        txt='./output/processed/{contrast}-{geneset}.txt'
     params: batch='-pe orte 1',scratchdir="/tmp"
     threads: 1
     run:
