@@ -11,7 +11,7 @@ import pandas as pd
 # # For running synapse client, which requires python 2
 # PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
 
-# Files are linked from
+# Files are linked from here into the local input directory
 # /external-data/DAT_114__PCBC_Data/mRNA/GO-Elite/GO_Elite_output/GO-Elite_results/CompleteResults/ORA/archived-20150520-045614
 
 INPUT_DIR = './input'
