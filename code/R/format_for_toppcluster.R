@@ -37,6 +37,9 @@ d2down <- d2 %>%
 write.table(d2up, file="DiffnameShort_DiffGenes_Express_mixedEffects_up_toppcluster.csv",
             sep=",", row.names=FALSE, col.names=FALSE, quote=FALSE)
 
+repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="goelite")
+thisScript <- getPermlink(repo, repositoryPath="code/R/format_for_toppcluster.R")
+
 fUp <- File("DiffnameShort_DiffGenes_Express_mixedEffects_up_toppcluster.csv", parentId='syn3471223')
 fUp <- synStore(fUp, used=obj@properties$id, executed=thisScript)
 
