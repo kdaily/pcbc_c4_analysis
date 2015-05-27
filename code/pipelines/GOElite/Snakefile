@@ -93,11 +93,21 @@ rule concatenate_text:
         './output/final/DiffExpr_GOElite_merged.txt'
     run:
         with open(output[0], 'w') as out:
-
+            
             d = pd.read_csv(input[0], sep="\t")
-
+	    
+            base1 = os.path.basename(input[0]).split(".txt")[0]
+	    contrast, geneset = base1.split("-")
+	    d["contrast"] = contrast
+	    
             for infile in input[1:]:
-                d = d.append(pd.read_csv(infile, sep="\t"))
+                base1 = os.path.basename(infile).split(".txt")[0]
+                contrast, geneset = base1.split("-")
+                
+                tmp = pd.read_csv(infile, sep="\t")
+                tmp["contrast"] = contrast
+                
+                d = d.append(tmp)
 
             d.to_csv(out, sep="\t", index=False)
 
