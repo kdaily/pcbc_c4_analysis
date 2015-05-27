@@ -99,6 +99,7 @@ rule concatenate_text:
             base1 = os.path.basename(input[0]).split(".txt")[0]
 	    contrast, geneset = base1.split("-")
 	    d["contrast"] = contrast
+	    d["geneset"] = geneset
 	    
             for infile in input[1:]:
                 base1 = os.path.basename(infile).split(".txt")[0]
@@ -106,6 +107,7 @@ rule concatenate_text:
                 
                 tmp = pd.read_csv(infile, sep="\t")
                 tmp["contrast"] = contrast
+	        tmp["geneset"] = geneset                
                 
                 d = d.append(tmp)
 
