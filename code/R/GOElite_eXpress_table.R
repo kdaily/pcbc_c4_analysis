@@ -8,44 +8,33 @@ library(synapseClient)
 
 synapseLogin()
 
-## Input files have been pre-processed to remove headers
-inputDir <- "/external-data/DAT_114__PCBC_Data/mRNA/GO-Elite/GO_Elite_output/GO-Elite_results/CompleteResults/ORA/archived-20150520-045614/processed"
+## Input files have been pre-processed in a pipeline
+## https://github.com/kdaily/pcbc_c4_analysis/tree/goelite/code/pipelines/GOElite
+id <- "syn4228803"
+obj <- synGet(id)
 
-# Get list of files
-fileList <- list.files(path = inputDir, pattern = '*.txt')
-nameList <- gsub("\\.txt", "", fileList)
-
-# Read them in
-dataList <- mlply(fileList, 
-                  function(x) fread(paste(inputDir, x, sep="/"), 
-                                    data.table=FALSE))
-
-# Convert to DF
-dataDF <- ldply(dataList, I)
-
-# Names never propogate for some reason...
-dataDF$X1 <- nameList[dataDF$X1]
-
-# Process them
-dataDF2 <- dataDF %>%
-  rename(comparison=X1) %>%
-  separate(comparison, c("contrast", "geneset"), sep="-")
+d <- as.data.frame(read_tsv(getFileLocation(obj)))
 
 # Column names have spaces, synapse tables doesn't like it
-colnames(dataDF2) <- gsub("[ -]", "_", colnames(dataDF2))
+colnames(d) <- gsub("[ -]", "_", colnames(d))
 
 # Auto-generate table schema
-tcresult <- as.tableColumns(dataDF2)
+tcresult <- as.tableColumns(d)
 cols <- tcresult$tableColumns
 fileHandleId <- tcresult$fileHandleId
 
 # Need longer string cols
 cols[[1]]@maximumSize <- as.integer(200)
-cols[[2]]@maximumSize <- as.integer(200)
-cols[[3]]@maximumSize <- as.integer(200)
+cols[[10]]@maximumSize <- as.integer(200)
+cols[[11]]@maximumSize <- as.integer(200)
+
+cols[[5]]@columnType <- "DOUBLE"
+cols[[7]]@columnType <- "DOUBLE"
+cols[[8]]@columnType <- "DOUBLE"
+cols[[9]]@columnType <- "DOUBLE"
 
 # Store in Synapse
 projectId <- "syn1773109"
 schema <- TableSchema(name="GOElite_eXpress", parent=projectId, columns=cols)
-table <- Table(schema, values=dataDF2)
+table <- Table(schema, values=d)
 table <- synStore(table)
