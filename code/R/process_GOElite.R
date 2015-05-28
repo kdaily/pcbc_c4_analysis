@@ -24,6 +24,7 @@ d2 <- d %>%
   select(Gene_Set_Name, contrast, geneset, Z_Score, AdjustedP) %>%
   tidyr::unite(GS, Gene_Set_Name, geneset, sep="_")
 
+# Get only diffname contrasts
 d3 <- d2 %>% 
   dcast(GS ~ contrast, value.var="Z_Score")%>%
   select(-contains("ale"), -contains("plasmid"), -contains("virus"), 
