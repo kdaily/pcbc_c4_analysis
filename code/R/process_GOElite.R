@@ -45,3 +45,29 @@ dev.off()
 
 f <- File("DiffState_GOElite_cluster.pdf", parentId='syn4228846')
 f <- synStore(f, used=inObj@properties$id, executed=thisScript)
+
+
+
+
+
+
+
+# Get only reprog contrasts
+d3 <- d2 %>% 
+  dcast(GS ~ contrast, value.var="Z_Score")%>%
+  select(GS, contains("plasmid"), contains("virus"), contains("NotApplicable"), -contains("ale"))
+
+# Any NA's get 0
+d3[is.na(d3)] <- 0
+
+forclust <- d3[, -1]
+rownames(forclust) <- d3$GS
+
+cluster.cols <- hclust(dist(forclust), method = "ward.D2")
+
+pdf("ReprogrammingVectorType_GOElite_cluster.pdf", width=100, height=20)
+plot(cluster.cols)
+dev.off()
+
+f <- File("ReprogrammingVectorType_GOElite_cluster.pdf", parentId='syn4228846')
+f <- synStore(f, used=inObj@properties$id, executed=thisScript)
