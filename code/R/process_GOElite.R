@@ -30,13 +30,11 @@ d3 <- d2 %>%
   select(-contains("ale"), -contains("plasmid"), -contains("virus"), 
          -contains("plasmid"), -contains("NotApplicable"))
 
-colnames(d3)
-
-# Any NA's get a p-value of 1
-d3[is.na(d3)] <- 1
+# Any NA's get 0
+d3[is.na(d3)] <- 0
 
 # Convert to log_10 for clustering
-forclust <- -log10(d3[, -1])
+forclust <- d3[, -1]
 rownames(forclust) <- d3$GS
 
 cluster.cols <- hclust(dist(forclust), method = "ward.D2")
