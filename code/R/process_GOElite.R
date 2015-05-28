@@ -6,10 +6,10 @@ library(reshape2)
 library(synapseClient)
 library(rGithubClient)
 
-thisRepo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="goelite")
-thisScript <- getPermlink(repo=thisRepo, path="code/R/process_GOElite.R")
-
 synapseLogin()
+
+thisRepo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="goelite")
+thisScript <- getPermlink(repo=thisRepo, repositoryPath="code/R/process_GOElite.R")
 
 inObj <- synGet('syn4228803')
 
