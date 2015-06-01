@@ -46,12 +46,6 @@ dev.off()
 f <- File("DiffState_GOElite_cluster.pdf", parentId='syn4228846')
 f <- synStore(f, used=inObj@properties$id, executed=thisScript)
 
-
-
-
-
-
-
 # Get only reprog contrasts
 d3 <- d2 %>% 
   dcast(GS ~ contrast, value.var="Z_Score")%>%

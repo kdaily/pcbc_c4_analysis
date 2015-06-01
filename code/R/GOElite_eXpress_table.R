@@ -1,11 +1,11 @@
-## Merge GO-Elite results
+## GO-Elite results to Synapse table
 
 library(plyr)
 library(dplyr)
 library(tidyr)
 library(data.table)
 library(synapseClient)
-
+library(readr)
 synapseLogin()
 
 ## Input files have been pre-processed in a pipeline
