@@ -53,6 +53,7 @@ rownames(allMeta) <- allMeta$prettyName
 
 RGSet <- RGSet[, allMeta$prettyName]
 pData(RGSet) <- allMeta[allMeta$prettyName, ]
+sampleNames(RGSet) <- pData(RGSet)$UID
 meta <- pData(RGSet)
 ```
 ### Filtering
@@ -114,14 +115,18 @@ plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRat
 repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
 script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
 
-write.table(beta, file='C4Meth450.tsv', col.names=NA,  sep='\t')
+beta <- cbind(data.frame(ProbeID=rownames(beta)),
+              beta)
+
+write.table(beta, file='C4Meth450.tsv', sep='\t', row.names=FALSE, quote=FALSE)
+
 file <- File('C4Meth450.tsv', parentId='syn2813225', name='Normalized methylation calls')
-synSetAnnotations(file) <- list(dataType="methylation")
+synSetAnnotations(file) <- list(dataType="methylation", fileType="genomicMatrix")
 
 usedFiles <- subset(fileList, prettyName %in% sampleNames(RGSet))
 act <- Activity(name="Normalize", 
                 description="Normalize methylation using minfi and lumi", 
-                used=usedFiles$id, executed=(script))
+                used='syn2653626', executed=(script))
 generatedBy(file) <- act
 data <- synStore(file)
 ```
