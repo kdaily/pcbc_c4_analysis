@@ -14,6 +14,19 @@ synapseLogin()
 
 METHYLATIONMETA_ID <-'syn3156828'
 ```
+
+```{r echo=FALSE}
+repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
+script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
+```
+
+```{r, echo=FALSE, include=FALSE, eval=FALSE}
+library(knit2synapse)
+knitfile2synapse(file="./normalize_methylation.Rmd", owner = "syn2233188",
+                 wikiName = "Quality Control Filtering and Normalization of methylation C4 data",
+                 overwrite = TRUE)
+```
+
 ### Find and download all of the idat files
 I'm using annotations to get the metadata because the new samples have yet to be added to the metadata tables.
 ```{r downloadChunk, cache=TRUE}
@@ -118,7 +131,7 @@ plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRat
 plotSampleRelation(smaller, method='mds', cv.Th=0, color=as.character(pData(gRatioSet.quantile)$Originating_Lab), dimension=c(3,4))
 ```
 ### Store the normalized dataset in Synapse
-```{r echo=FALSE}
+```{r echo=FALSE, include=FALSE, eval=FALSE}
 repo <- getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="methylation")
 script <- getPermlink(repo, "code/Rmd/normalize_methylation.Rmd")
 
@@ -127,7 +140,7 @@ beta <- cbind(data.frame(ProbeID=rownames(beta)),
 
 write.table(beta, file='C4Meth450.tsv', sep='\t', row.names=FALSE, quote=FALSE)
 
-file <- File('C4Meth450.tsv', parentId='syn2813225', name='Normalized Methylation Matrix')
+file <- File('C4Meth450.tsv', parentId='syn3219792', name='Normalized Methylation Matrix')
 synSetAnnotations(file) <- list(dataType="methylation", fileType="genomicMatrix")
 usedFiles <- c('syn2653626')
 
@@ -139,13 +152,13 @@ generatedBy(file) <- act
 data <- synStore(file)
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=FALSE, eval=FALSE}
 detP <- cbind(data.frame(ProbeID=rownames(detP)),
               detP)
 
 write.table(detP, file='detectionPValues.tsv', sep='\t', row.names=FALSE, quote=FALSE)
 
-detfile <- File('detectionPValues.tsv', parentId='syn2813225', name='Detection p-values')
+detfile <- File('detectionPValues.tsv', parentId='syn4259428', name='Detection p-values')
 synSetAnnotations(detfile) <- list(dataType="methylation", fileType="genomicMatrix")
 usedFiles <- c('syn2653626')
 
