@@ -5,6 +5,9 @@ library(minfi)
 library(lumi)
 library(knitr)
 library(rGithubClient)
+library(plyr)
+library(dplyr)
+library(stringr)
 
 library(synapseClient)
 synapseLogin()
@@ -19,25 +22,28 @@ colnames(fileList) <- gsub("file\\.", "", colnames(fileList))
 
 # Assumes in this directory
 dataDir <- "../../data/"
+
+origNames <- fileList$name
+
+fileListDistinct <- mutate(fileList, 
+                           prettyName=str_replace(name, "(.*)_[RG].*", "\\1"),
+                           Basename=str_join(dataDir, prettyName, sep="/"),
+                           name=NULL, id=NULL) %>% distinct
+
 files <- lapply(fileList$id,
                 function (x) synGet(x, downloadLocation=dataDir))
 ```
 ### Load the methylation data
 ```{r readChunk, cache=TRUE, dependson="downloadChunk"}
-RGSet <- read.450k.exp(base = dataDir)
+RGSet <- read.450k.exp(targets=fileListDistinct)
 ```
 ### Add the metadata
 As noted above, this code is a temporary fix until the metadata tables are updated with the proper information.
 ```{r}
 # metaTable <- synTableQuery(sprintf("select * from %s", METHYLATIONMETA_ID))
 # metaTbl <- metaTable@values
-fileList$prettyName <- gsub("_Red.*", "", fileList$name, perl=TRUE)
-fileList$prettyName <- gsub("_Grn.*", "", fileList$prettyName, perl=TRUE)
 
-metaTbl <- fileList
-metaTbl$name <- NULL
-metaTbl$id <- NULL
-metaTbl  <- unique(metaTbl)
+metaTbl <- fileListDistinct
 
 CELLMETA_ID <- "syn2767694"
 cellTable <- synTableQuery(sprintf("select * from %s", CELLMETA_ID))
@@ -55,6 +61,7 @@ RGSet <- RGSet[, allMeta$prettyName]
 pData(RGSet) <- allMeta[allMeta$prettyName, ]
 sampleNames(RGSet) <- pData(RGSet)$UID
 meta <- pData(RGSet)
+sampleNames(RGSet) <- pData(RGSet)$UID
 ```
 ### Filtering
 Filter out the data sets that are not public and remove poor quality cell-lines.  Specicically SC12-040 has a problematic karyotype.
