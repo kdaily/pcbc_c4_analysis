@@ -57,17 +57,16 @@ rule process:
 	     # Count pass qc primary mapped reads
          samtools view -F 0x300 {params.scratchdir}/{params.uid}/{params.uid}.bam | wc -l > {params.scratchdir}/{params.uid}/mapped.txt ; \
 
-
          # Count pass qc primary unmapped reads
          samtools view -f 0x4 -F 0x300 {params.scratchdir}/{params.uid}/unmapped.bam | wc -l > {params.scratchdir}/{params.uid}/unmapped.txt ; \
 
          # Together
-         paste -d, {params.scratchdir}/{params.uid}/mapped.txt {params.scratchdir}/{params.uid}/unmapped.txt > {params.scratchdir}/{params.uid}/both.txt
+         paste -d, {params.scratchdir}/{params.uid}/mapped.txt {params.scratchdir}/{params.uid}/unmapped.txt > {params.scratchdir}/{params.uid}/both.txt ; \
 
          # Write stuff out
          echo "UID,mapped,unmapped,total" > {output} ; \
 
-         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output} ;
+         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output} ; \
 
 	     ## cleanup
 	     # rm -rf {params.scratchdir}/{params.uid}/
