@@ -55,7 +55,7 @@ rule process:
          samtools index {params.scratchdir}/{params.uid}/unmapped.bam ; \
 
 	     # Count pass qc primary mapped reads
-         samtools view -f 0x2 -F 0x300 {params.scratchdir}/{params.uid}/{params.uid}.bam | wc -l > {params.scratchdir}/{params.uid}/mapped.txt ; \
+         samtools view -F 0x300 {params.scratchdir}/{params.uid}/{params.uid}.bam | wc -l > {params.scratchdir}/{params.uid}/mapped.txt ; \
 
 
          # Count pass qc primary unmapped reads
@@ -67,7 +67,7 @@ rule process:
          # Write stuff out
          echo "UID,mapped,unmapped,total" > {output} ; \
 
-         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' >> {output} ;
+         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output} ;
 
 	     ## cleanup
 	     # rm -rf {params.scratchdir}/{params.uid}/
