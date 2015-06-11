@@ -6,26 +6,16 @@ import os
 import csv
 
 # For running synapse client, which requires python 2
-PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
+PY2VIRTENV = "%s/.virtualenvs/python2/bin/activate" % os.environ['HOME']
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-SAMPLE_FILE = SAMPLE_FILE[:10]
+SAMPLE_FILE = SAMPLE_FILE[:2]
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
-def get_filename(wildcards):
-    try:
-        filename = '%s.bam' % SAMPLE_DICT[wildcards[0]]['UID']
-    except Exception as e:
-        print(e)
-        print(wildcards)
-        raise(e)
-
-    return filename
-
 def get_mapped_synid(wildcards):
     try:
-        synid = SAMPLE_DICT[wildcards[0]]['mapped_bam']
+        synid = SAMPLE_DICT[wildcards[0]]['bam_mapped']
     except Exception as e:
         print(e)
         print(wildcards)
@@ -35,23 +25,13 @@ def get_mapped_synid(wildcards):
 
 def get_unmapped_synid(wildcards):
     try:
-        synid = SAMPLE_DICT[wildcards[0]]['unmapped_bam']
+        synid = SAMPLE_DICT[wildcards[0]]['bam_unmapped']
     except Exception as e:
         print(e)
         print(wildcards)
         raise(e)
 
     return synid
-
-def get_sample_info(wildcards):
-    try:
-        info = SAMPLE_DICT[wildcards[0]]
-    except Exception as e:
-        print(e)
-        print(wildcards)
-        raise(e)
-
-    return info
 
 rule all:
      input: expand('output/{uid}.txt', uid=SAMPLE_DICT.keys())
@@ -70,16 +50,26 @@ rule process:
          synapse get {params.unmapped_bam} --downloadLocation {params.scratchdir}/{params.uid}/ ; \
     	 deactivate ; \
 
-	     # Work
+         # Index
          samtools index {params.scratchdir}/{params.uid}/{params.uid}.bam ; \
          samtools index {params.scratchdir}/{params.uid}/unmapped.bam ; \
 
-         # Count mapped, pass qc reads
-         samtools
+	     # Count pass qc primary mapped reads
+         samtools view -f 0x2 -F 0x300 {params.scratchdir}/{params.uid}/{params.uid}.bam | wc -l > {params.scratchdir}/{params.uid}/mapped.txt ; \
+
+
+         # Count pass qc primary unmapped reads
+         samtools view -f 0x4 -F 0x300 {params.scratchdir}/{params.uid}/unmapped.bam | wc -l > {params.scratchdir}/{params.uid}/unmapped.txt ; \
+
+         # Together
+         paste -d, {params.scratchdir}/{params.uid}/mapped.txt {params.scratchdir}/{params.uid}/unmapped.txt > {params.scratchdir}/{params.uid}/both.txt
+
+         # Write stuff out
+         echo "UID,mapped,unmapped,total" > {output} ; \
+
+         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' >> {output} ;
 
 	     ## cleanup
-	     rm -rf {params.scratchdir}/{params.uid}/
+	     # rm -rf {params.scratchdir}/{params.uid}/
 
          """
-
-    return info
