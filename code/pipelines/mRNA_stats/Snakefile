@@ -9,7 +9,6 @@ import csv
 PY2VIRTENV = "%s/.virtualenvs/python2/bin/activate" % os.environ['HOME']
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-SAMPLE_FILE = SAMPLE_FILE[:1]
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
@@ -69,6 +68,6 @@ rule process:
          awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output.final} ; \
 
 	     ## cleanup
-	     # rm -rf {params.scratchdir}/{params.uid}/
+	     rm -rf {params.scratchdir}/{params.uid}/
 
          """
