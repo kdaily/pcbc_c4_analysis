@@ -32,8 +32,7 @@ res3 <- res2 %>%
   filter(as.character(value.x) < as.character(value.y)) %>%
   rename(class=variable, variable1=value.x, variable2=value.y) %>%
   mutate(variable1short=str_replace_all(variable1, '[^[:alnum:]]', ''),
-         variable2short=str_replace_all(variable2, '[^[:alnum:]]', ''))# %>%
-  # select(class, variable1, variable1short, variable2, variable2short)
+         variable2short=str_replace_all(variable2, '[^[:alnum:]]', ''))
 
 res3diff <- res3 %>% filter(class == "Diffname_short") %>% mutate(datarestriction="All")
 res3rest <- res3 %>% filter(class != "Diffname_short")
