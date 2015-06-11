@@ -30,9 +30,19 @@ def get_filename(wildcards):
 
     return filename
 
-def get_synid(wildcards):
+def get_mapped_synid(wildcards):
     try:
-        synid = SAMPLE_DICT[wildcards[0]]['id']
+        synid = SAMPLE_DICT[wildcards[0]]['mapped_bam']
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+
+    return synid
+
+def get_unmapped_synid(wildcards):
+    try:
+        synid = SAMPLE_DICT[wildcards[0]]['unmapped_bam']
     except Exception as e:
         print(e)
         print(wildcards)
@@ -53,28 +63,29 @@ def get_sample_info(wildcards):
 rule all:
      input: expand('./output/eXpress/ucsc/{sample}_results.xprs', sample=SAMPLE_DICT.keys())
 
-rule bowtie_express:
+rule process:
     input: './input/samples/{sample}.txt'
     output: './output/eXpress/ucsc/{sample}_results.xprs',
-    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
+    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',mapped_bam=get_mapped_synid,scratchdir="/tmp",unmapped_bam=get_unmapped_synid
     threads: 8
     shell: """## setup
-	      mkdir -p {params.scratchdir}/{params.sample}/eXpress/ ; \
-	      mkdir -p {params.scratchdir}/{params.sample}/fastq/ ; \
+         mkdir -p {params.scratchdir}/{params.sample}/ ; \
 
-              # Get files from synapse
-	      source {params.python2virtenv}; \
-              synapse get {params.synid} --downloadLocation {params.scratchdir}/{params.sample}/fastq/ ; \
-    	      deactivate ; \
+         # Get files from synapse
+	     source {params.python2virtenv}; \
+         synapse get {params.mapped_bam} --downloadLocation {params.scratchdir}/{params.sample}/ ; \
+         synapse get {params.unmapped_bam} --downloadLocation {params.scratchdir}/{params.sample}/ ; \
+    	 deactivate ; \
 
-	      # Work
-	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
+	     # Work
+         samtools index {params.scratchdir}/{params.sample}/{params.sample}.bam ; \
+         samtools index {params.scratchdir}/{params.sample}/unmapped.bam ; \
 
-	      # Save
-	      mv {params.scratchdir}/{params.sample}/eXpress/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs
-	      mv {params.scratchdir}/{params.sample}/eXpress/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs
+         # Count mapped, pass qc reads
+         samtools
+	     bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
 
-	      ## cleanup
-	      rm -rf {params.scratchdir}/{params.sample}/ #fastq/{params.filename}
+	     ## cleanup
+	     rm -rf {params.scratchdir}/{params.sample}/
 
-           """
+         """
