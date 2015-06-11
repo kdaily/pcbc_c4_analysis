@@ -38,7 +38,7 @@ rule all:
 
 rule process:
     input: './input/samples/{uid}.txt'
-    output: final="output/{uid}.txt",bai='/tmp/{uid}/{uid}.bam.bai'
+    output: final="output/{uid}.txt"
     params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,uid='{uid}',mapped_bam=get_mapped_synid,scratchdir="/tmp",unmapped_bam=get_unmapped_synid
     threads: 8
     shell: """## setup
@@ -64,9 +64,9 @@ rule process:
          paste -d, {params.scratchdir}/{params.uid}/mapped.txt {params.scratchdir}/{params.uid}/unmapped.txt > {params.scratchdir}/{params.uid}/both.txt ; \
 
          # Write stuff out
-         echo "UID,mapped,unmapped,total" > {output} ; \
+         echo "UID,mapped,unmapped,total" > {output.final} ; \
 
-         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output} ; \
+         awk -F',' '{{sum = $1 + $2; print "{params.uid},"$1","$2","sum}}' {params.scratchdir}/{params.uid}/both.txt >> {output.final} ; \
 
 	     ## cleanup
 	     # rm -rf {params.scratchdir}/{params.uid}/
