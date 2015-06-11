@@ -9,7 +9,7 @@ import csv
 PY2VIRTENV = "%s/.virtualenvs/python2/bin/activate" % os.environ['HOME']
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-SAMPLE_FILE = SAMPLE_FILE[:2]
+SAMPLE_FILE = SAMPLE_FILE[:1]
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
