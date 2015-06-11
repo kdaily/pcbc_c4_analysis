@@ -9,20 +9,13 @@ import csv
 PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-# SAMPLE_FILE = SAMPLE_FILE
+SAMPLE_FILE = SAMPLE_FILE[:10]
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
-BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/hg19_knownGene"
-TARGET_FILE = "./input/transcripts/hg19_knownGene.fasta"
-
-# For provenance
-BOWTIE2_SYNID = "syn3270408"
-EXPRESS_SYNID = "syn2243152"
-
 def get_filename(wildcards):
     try:
-        filename = SAMPLE_DICT[wildcards[0]]['fileName']
+        filename = '%s.bam' % SAMPLE_DICT[wildcards[0]]['UID']
     except Exception as e:
         print(e)
         print(wildcards)
@@ -61,31 +54,32 @@ def get_sample_info(wildcards):
     return info
 
 rule all:
-     input: expand('./output/eXpress/ucsc/{sample}_results.xprs', sample=SAMPLE_DICT.keys())
+     input: expand('output/{uid}.txt', uid=SAMPLE_DICT.keys())
 
 rule process:
-    input: './input/samples/{sample}.txt'
-    output: './output/eXpress/ucsc/{sample}_results.xprs',
-    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',mapped_bam=get_mapped_synid,scratchdir="/tmp",unmapped_bam=get_unmapped_synid
+    input: './input/samples/{uid}.txt'
+    output: final="output/{uid}.txt",bai='/tmp/{uid}/{uid}.bam.bai'
+    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,uid='{uid}',mapped_bam=get_mapped_synid,scratchdir="/tmp",unmapped_bam=get_unmapped_synid
     threads: 8
     shell: """## setup
-         mkdir -p {params.scratchdir}/{params.sample}/ ; \
+         mkdir -p {params.scratchdir}/{params.uid}/ ; \
 
          # Get files from synapse
 	     source {params.python2virtenv}; \
-         synapse get {params.mapped_bam} --downloadLocation {params.scratchdir}/{params.sample}/ ; \
-         synapse get {params.unmapped_bam} --downloadLocation {params.scratchdir}/{params.sample}/ ; \
+         synapse get {params.mapped_bam} --downloadLocation {params.scratchdir}/{params.uid}/ ; \
+         synapse get {params.unmapped_bam} --downloadLocation {params.scratchdir}/{params.uid}/ ; \
     	 deactivate ; \
 
 	     # Work
-         samtools index {params.scratchdir}/{params.sample}/{params.sample}.bam ; \
-         samtools index {params.scratchdir}/{params.sample}/unmapped.bam ; \
+         samtools index {params.scratchdir}/{params.uid}/{params.uid}.bam ; \
+         samtools index {params.scratchdir}/{params.uid}/unmapped.bam ; \
 
          # Count mapped, pass qc reads
          samtools
-	     bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
 
 	     ## cleanup
-	     rm -rf {params.scratchdir}/{params.sample}/
+	     rm -rf {params.scratchdir}/{params.uid}/
 
          """
+
+    return info
