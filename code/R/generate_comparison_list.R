@@ -58,13 +58,13 @@ res3 <- res3 %>%
 
 # Rename the colulmns, and create short versions of everything
 # Short versions contain ONLY alphanumerics
-res3 <- %>%
-  rename(class=variable, variable1=value.x, variable2=value.y) %>%
-  mutate(variable1short=str_replace_all(variable1, '[^[:alnum:]]', ''),
-         variable2short=str_replace_all(variable2, '[^[:alnum:]]', ''))
+res3 <- res3 %>%
+  dplyr::rename(class=variable, variable1=value.x, variable2=value.y) %>%
+  mutate(variable1Short=str_replace_all(variable1, '[^[:alnum:]]', ''),
+         variable2Short=str_replace_all(variable2, '[^[:alnum:]]', ''))
 
 # For the differentiation state comparisons, the data restriction is All
-res3diff <- res3 %>% filter(class == "Diffname_short") %>% mutate(datarestriction="All")
+res3diff <- res3 %>% filter(class == "Diffname_short") %>% mutate(dataRestriction="All")
 
 # For all other comparisons, the data restriction is All + all diffstates
 res3rest <- res3 %>% filter(class != "Diffname_short")
@@ -72,7 +72,7 @@ res3rest <- res3 %>% filter(class != "Diffname_short")
 origlen <- nrow(res3rest)
 restdiffstates <- c("All", diffstates)
 res3rest <- res3rest[rep(1:origlen, each=length(restdiffstates)), ] %>%
-  mutate(datarestriction=rep(restdiffstates, times=origlen))
+  mutate(dataRestriction=rep(restdiffstates, times=origlen))
 
 # Combine the diffstate comparisons and the rest
 res4 <- rbind(res3diff, res3rest) 
@@ -81,8 +81,23 @@ res4 <- rbind(res3diff, res3rest)
 # Then create the final comparison column: datarestriction__variable1_vs_variable2
 # Finally, reorder the columns
 res4 <- res4 %>%
-  mutate(datarestrictionshort=str_replace_all(datarestriction, '[^[:alnum:]]', '')) %>%
-  unite(tmp, variable1short, variable2short, sep="_vs_", remove=FALSE) %>%
-  unite(comparison, datarestrictionshort, tmp, sep="__", remove=FALSE) %>%
-  select(class, datarestriction, datarestrictionshort, variable1, variable1short, 
-         variable2, variable2short, comparison, -tmp)
+  mutate(dataRestrictionShort=str_replace_all(dataRestriction, '[^[:alnum:]]', '')) %>%
+  unite(tmp, variable1Short, variable2Short, sep="_vs_", remove=FALSE) %>%
+  unite(comparison, dataRestrictionShort, tmp, sep="__", remove=FALSE) %>%
+  select(class, dataRestriction, dataRestrictionShort, variable1, variable1Short, 
+         variable2, variable2Short, comparison, -tmp)
+
+# Upload to a Synapse table
+tc <- list(class=TableColumn(name="class", columnType="STRING", maximumSize=200),
+           datarestriction=TableColumn(name="dataRestriction", columnType="STRING", maximumSize=200),
+           datarestrictionshort=TableColumn(name="dataRestrictionShort", columnType="STRING", maximumSize=200),
+           variable1=TableColumn(name="variable1", columnType="STRING", maximumSize=200),
+           variable1short=TableColumn(name="variable1Short", columnType="STRING", maximumSize=200),
+           variable2=TableColumn(name="variable2", columnType="STRING", maximumSize=200),
+           variable2short=TableColumn(name="variable2Short", columnType="STRING", maximumSize=200),
+           comparison=TableColumn(name="comparison", columnType="STRING", maximumSize=500))
+
+
+schema <- TableSchema(name="Differential comparisons", parent="syn1773109", columns=tc)
+tbl <- Table(tableSchema=schema, values=res4)
+tbl <- synStore(tbl)
