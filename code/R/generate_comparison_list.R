@@ -34,11 +34,6 @@ res <- synTableQuery(sprintf("select * from syn3156503"))@values %>%
   filter(Diffname_short %in% diffstates) %>%
   select(one_of(FactorCovariates))
 
-# Only for ordering the diffstates so MESO-5 comes first.
-# Need to change them all back afterwards!
-res <- res %>%
-  mutate(Diffname_short=ifelse(Diffname_short == "MESO-5", "MESO-05", Diffname_short))
-
 # Melt and get unique, get rid of anything N/A
 res2 <- melt(res, id.vars = "C4_Cell_Line_ID") %>% 
   select(-C4_Cell_Line_ID) %>%
@@ -50,11 +45,6 @@ res2 <- melt(res, id.vars = "C4_Cell_Line_ID") %>%
 res3 <- res2 %>% 
   left_join(res2, by=c("variable")) %>%
   filter(as.character(value.x) < as.character(value.y))
-
-# Change back to MESO-5
-res3 <- res3 %>%
-  mutate(value.x=ifelse(value.x == "MESO-05", "MESO-5", value.x),
-         value.y=ifelse(value.y == "MESO-05", "MESO-5", value.y))
 
 # Rename the colulmns, and create short versions of everything
 # Short versions contain ONLY alphanumerics
@@ -97,6 +87,12 @@ tc <- list(class=TableColumn(name="class", columnType="STRING", maximumSize=200)
            variable2short=TableColumn(name="variable2Short", columnType="STRING", maximumSize=200),
            comparison=TableColumn(name="comparison", columnType="STRING", maximumSize=500))
 
+schema <- synGet('syn4483642')
+tbl <- synTableQuery("select * from syn4483642")
+synDeleteRows(tbl)
+schema <- synGet('syn4483642')
+tbl <- Table(tableSchema=schema, values=res4)
+tbl <- synStore(tbl)
 
 schema <- TableSchema(name="Differential comparisons", parent="syn1773109", columns=tc)
 tbl <- Table(tableSchema=schema, values=res4)
