@@ -59,5 +59,6 @@ script <- getPermlink(repo, repositoryPath="code/R/merge_cufflinks_public.R")
 fpkmFile <- File("public_expressionCalls_summarized.tsv", 
                  name="mRNA Expression Matrix", parentId="syn3219792",
                  annotations=list(fileType="genomicMatrix", dataType="mRNA"))
+generatedBy(fpkmFile) <- Activity(used="syn2246521", executed=script)
 
-fpkmFile <- synStore(countsFile, used="syn2246521", executed=script)
+fpkmFile <- synStore(fpkmFile)
