@@ -142,9 +142,9 @@ beta <- cbind(data.frame(ProbeID=rownames(beta)),
 write.table(beta, file='norm_methyl_matrix.tsv', sep='\t', row.names=FALSE, quote=FALSE)
 
 file <- File('norm_methyl_matrix.tsv', name='Normalized Methylation Matrix',
-             parentId=OUTPUT_FOLDER_ID )
+             parentId=OUTPUT_FOLDER_ID)
 synSetAnnotations(file) <- list(dataType="methylation", fileType="genomicMatrix")
-usedFiles <- c('syn2653626')
+usedFiles <- c('syn4558832', 'syn4558493')
 
 act <- Activity(name="Normalize", 
                 description="Normalize methylation using minfi and lumi", 
