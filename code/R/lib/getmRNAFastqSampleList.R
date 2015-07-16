@@ -5,7 +5,7 @@ library(plyr)
 
 synapseLogin()
 
-newq <- "select id,C4_Cell_Line_ID,UID,Diffname_short from file where projectId=='syn1773109' AND dataType=='mRNA' AND fileType=='fastq'"
+newq <- "select id,UID from file where projectId=='syn1773109' AND dataType=='mRNA' AND fileType=='fastq'"
 newRes <- synapseQuery(newq)
 colnames(newRes) <- gsub(".*\\.", "", colnames(newRes))
 
@@ -14,6 +14,6 @@ getFileName <- function(x) {
   data.frame(fileName=o@fileHandle$fileName)
 }
 
-foo <- ddply(newRes, .(id), getFileName)
+foo <- ddply(newRes, .(id), getFileName, .progress="text")
 newResMerged <- merge(newRes, foo, by="id")
 write.csv(newResMerged, file="sample_table.csv", row.names=FALSE, quote=FALSE)

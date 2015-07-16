@@ -9,7 +9,7 @@ import csv
 PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
 
 SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
-SAMPLE_FILE = SAMPLE_FILE
+# SAMPLE_FILE = SAMPLE_FILE
 
 SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
 
@@ -59,7 +59,7 @@ rule all:
  
 rule bowtie_express:
     input: './input/samples/{sample}.txt'
-    output: './output/eXpress/ucsc/{sample}_results.xprs'
+    output: './output/eXpress/ucsc/{sample}_results.xprs', 
     params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
     threads: 8
     shell: """## setup
