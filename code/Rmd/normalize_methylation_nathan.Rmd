@@ -163,11 +163,11 @@ write.table(detP, file='detectionPValues.tsv', sep='\t', row.names=FALSE, quote=
 detfile <- File('detectionPValues.tsv', name='Detection p-values',
                 parentId=OUTPUT_FOLDER_ID)
 synSetAnnotations(detfile) <- list(dataType="methylation", fileType="genomicMatrix")
-usedFiles <- c('syn2653626')
+usedFiles <- c('syn4558832', 'syn4558493')
 
 act <- Activity(name="Detection p-values", 
                 description="Determine detection significance per probe per sample.", 
-                used='syn2653626', executed=(script))
+                used=usedFiles, executed=script)
 generatedBy(detfile) <- act
 
 data <- synStore(detfile)
