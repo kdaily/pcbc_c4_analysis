@@ -30,7 +30,7 @@ orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
 
 ```
 
-```{r readdegenesdata}
+```{r readdegenesdata_mrna}
 obj <- synGet("syn4484232")
 d <- fread(getFileLocation(obj), data.table=FALSE)
 
@@ -49,7 +49,7 @@ d2 <- d %>%
   filter(class == "Diffname_short")
 ```
 
-```{r readmetadata}
+```{r readmetadata_mrna}
 metadata <- synTableQuery("select * from syn3156503")@values %>%
   filter(Diffname_short != "") %>%
   filter(Cell_Type == "PSC") %>%  
@@ -58,7 +58,7 @@ metadata <- synTableQuery("select * from syn3156503")@values %>%
   filter(C4_Karyotype_Result != "abnormal")
 ```
 
-```{r despecificgenes}
+```{r despecificgenes_mrna}
 # Find diff state specific genes
 res <- llply(unique(d2$variable1),
              function(x) setdiff(filter(d2, variable1 == x)$GeneSymbol, 
@@ -68,12 +68,12 @@ names(res) <- unique(d2$variable1)
 diffstateSpecificGenes <- ldply(res, function(x) data.frame(GeneSymbol=x), .id="diffstate")
 ```
 
-```{r keepgenes}
+```{r keepgenes_mrna}
 # Keep genes
 keepGenes <- diffstateSpecificGenes
 ```
 
-```{r getcountdata}
+```{r getcountdata_mrna}
 countObj <- synGet("syn4483934")
 
 countData <- fread(getFileLocation((countObj)), data.table=FALSE) %>%
@@ -81,22 +81,27 @@ countData <- fread(getFileLocation((countObj)), data.table=FALSE) %>%
   filter(GeneSymbol %in% d2$GeneSymbol)
 
 rownames(countData) <- countData$GeneSymbol
-```
 
-```{r}
-eset <- ExpressionSet(assayData=as.matrix(countData[, -1]),
-                      phenoData=AnnotatedDataFrame(metadata),
-                      featureData=AnnotatedDataFrame(countData[, c("GeneSymbol"), drop=F]))
+existingUIDs <- intersect(colnames(countData), metadata$UID)
 
-countData <- countData %>%
-  dplyr::select(one_of(c("GeneSymbol", existingUIDs)))
+metadata <- metadata %>% filter(UID %in% existingUIDs)
+
+countData <- countData %>% select(GeneSymbol, one_of(metadata$UID))
 
 countData2 <- countData
 rownames(countData2) <- countData2$GeneSymbol
 
+# assayData <- as.matrix(countData[, -1])
+# phenoData <- metadata
+# rownames(phenoData) <- metadata$UID
+# 
+# eset <- ExpressionSet(assayData=assayData,
+#                       phenoData=AnnotatedDataFrame(phenoData),
+#                       featureData=AnnotatedDataFrame(countData[, c("GeneSymbol"), drop=F]))
+
 ```
 
-```{r}
+```{r cluster_mRNA}
 countData3 <- melt(countData2, id.vars = "GeneSymbol") %>%
   rename(UID=variable) %>% left_join(metadata[, c("UID", "Diffname_short")])
 
@@ -114,7 +119,7 @@ countMat <- countMat[, metadataReordered$UID]
 
 ```
 
-```{r}
+```{r plot_mrna}
 dfAnnotations <- metadataReordered %>% 
   rename(DiffState=Diffname_short) %>%
   select(DiffState)
@@ -126,7 +131,7 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
                                                             "MESO-15"="green",
                                                             "MESO-30"="pink")))
 
-pdf('foo.pdf')
+pdf('mRNA.pdf')
 ht <- Heatmap(countMat, name = "log10(Expression)", 
               # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
@@ -146,33 +151,74 @@ dev.off()
 
 ```
 
+```{r readdegenesdata_mirna}
+obj <- synGet("syn4609631")
+d <- fread(getFileLocation(obj), data.table=FALSE)
 
-```{r eval=FALSE, include=FALSE}
-# Use only uniquely diff expressed genes
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2 <- d %>% 
+  rename(comparison=Comparison) %>%
+  filter(abs(logFC) > 2,
+         adj.P.value < 0.0001,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short")
+```
 
-countData2 <- filter(countData, GeneSymbol %in% keepGenes$GeneSymbol)
+```{r readmetadata_mirna}
+metadata <- synTableQuery("select * from syn3219876")@values %>%
+  filter(Diffname_short != "") %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(pass_qc == "TRUE") %>%
+  filter(exclude != "TRUE") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+```
+
+```{r getcountdata_mirna}
+countObj <- synGet("syn3355993")
+
+countData <- fread(getFileLocation((countObj)), data.table=FALSE) %>%
+  rename(GeneSymbol=id) %>%
+  filter(GeneSymbol %in% d2$GeneSymbol)
+
+existingUIDs <- intersect(colnames(countData), metadata$UID)
+
+metadata <- metadata %>% filter(UID %in% existingUIDs)
+
+countData <- countData %>%
+  dplyr::select(one_of(c("GeneSymbol", metadata$UID)))
+
+countData2 <- countData
 rownames(countData2) <- countData2$GeneSymbol
 
-# Make sure in order by keepGenes for heatmap annot
-countData2 <- countData2[as.character(keepGenes$GeneSymbol), ]
+countData2[, -1] <- log10(countData2[, -1] + 0.001)
 
+```
+
+```{r cluster_mirna}
 countData3 <- melt(countData2, id.vars = "GeneSymbol") %>%
   rename(UID=variable) %>% left_join(metadata[, c("UID", "Diffname_short")])
 
 clusterings <- dlply(countData3, .(Diffname_short), diffStateClusterFxn)
 
 metadataReordered <- ldply(orderedDiffState, 
-                           diffStateReorderFxn, clusterings=clusterings, metadata=metadata)
+                           diffStateReorderFxn, 
+                           metadata=metadata, clusterings=clusterings)
 
+countMat <- countData2[, -1]
 countMat <- scale(countMat)
 countMat <- t(scale(t(countMat)))
 
 countMat <- countMat[, metadataReordered$UID]
 
-deData <- keepGenes %>% 
-  rename(DiffExprGroup=diffstate) %>%
-  select(DiffExprGroup)
+```
 
+```{r plot_mirna}
 dfAnnotations <- metadataReordered %>% 
   rename(DiffState=Diffname_short) %>%
   select(DiffState)
@@ -184,20 +230,14 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
                                                             "MESO-15"="green",
                                                             "MESO-30"="pink")))
 
-deAnnotation <- HeatmapAnnotation(df=deData,
-                                  which = "row", width = unit(0.5, "cm"),
-                                  col=list(DiffExprGroup=c("EB"="red", "ECTO"="blue", 
-                                                           "SC"="orange", "DE"="yellow",
-                                                           "MESO-5"="pink", "MESO-15"="green",
-                                                           "MESO-30"="black")))
-
-ht <- Heatmap(countMat, name = "Expression", 
+pdf('miRNA.pdf')
+ht <- Heatmap(countMat, name = "log10(Expression)", 
               # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
               show_column_names = FALSE,
               # row_names_gp = gpar(fontsize = 8),
               # column_names_gp = gpar(fontsize = 8),
-              cluster_rows = FALSE,
+              cluster_rows = TRUE,
               cluster_columns = FALSE,
               clustering_method_rows = "average",
               clustering_method_columns = "average",
@@ -205,6 +245,7 @@ ht <- Heatmap(countMat, name = "Expression",
               show_column_hclust = FALSE, 
               top_annotation = samplesAnnotation)
 
-print(ht + deAnnotation)
-```
+print(ht)
+dev.off()
 
+```
