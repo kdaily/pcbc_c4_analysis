@@ -6,10 +6,12 @@ library(data.table)
 library(stringr)
 library(tidyr)
 library(reshape2)
-library(ComplexHeatmap)
 synapseLogin()
 
 knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+
+orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
+
 ```
 
 ```{r query}
@@ -17,7 +19,8 @@ knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
 colsToUse <- c('id', 'dataType', 'fileType', 'fileSubType', 'UID', 'biologicalSampleName',
                'C4_Cell_Line_ID', 'Originating_Lab_ID', 'Originating_Lab', 'Cell_Line_Type',
                'Cell_Type_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Vector_Type',
-               'Reprogramming_Gene_Combination', 'pass_qc', 'exclude')
+               'Reprogramming_Gene_Combination', 'pass_qc', 'exclude', 'Diffname_short',
+               'Gender')
 
 # query the table with specific columns
 colsToUseStr <- paste(colsToUse, collapse=",")
@@ -36,5 +39,37 @@ methylationData <- synQuery(sprintf(queryTemplate, colsToUseStr, 'methylation'),
 allData <- rbind(rnaData, mirnaData, methylationData)
 colnames(allData) <- gsub(".*\\.", "", colnames(allData))
 allData <- allData[, colsToUse]
+```
+
+```{r metadata}
+# Filter metadata based on unique biological samples, not UIDs
+metadata <- allData %>%
+  filter(Diffname_short %in% orderedDiffState) %>%
+  select(dataType, biologicalSampleName, C4_Cell_Line_ID, Diffname_short,
+         Cell_Line_Type, Reprogramming_Vector_Type, Reprogramming_Gene_Combination,
+         Tissue_of_Origin, Cell_Line_Type, Gender) %>%
+  unique()
+
+```
+
+```{r}
+foo <- metadata %>% 
+  select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
+         Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
+    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
+
+
+bar <- foo %>%
+  group_by(Diffname_short, variable, value) %>%
+  summarize(n=length(unique(C4_Cell_Line_ID)))
+
+baz <- bar %>%
+  summarize(s=paste(n, collapse="/")) %>%
+  dcast(variable ~ Diffname_short, value.var="s")
+
+baz2 <- metadata %>% 
+  select(Diffname_short, dataType, UID) %>%
+  
+  
 ```
 
