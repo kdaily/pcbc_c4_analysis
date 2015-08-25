@@ -17,7 +17,7 @@ orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
 
 ```{r query}
 # Which columns to consider
-colsToUse <- c('id', 'dataType', 'fileType', 'fileSubType', 'UID', 'biologicalSampleName',
+colsToUse <- c('UID', 'biologicalSampleName',
                'C4_Cell_Line_ID', 'Originating_Lab_ID', 'Originating_Lab', 'Cell_Line_Type',
                'Cell_Type_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Vector_Type',
                'Reprogramming_Gene_Combination', 'pass_qc', 'exclude', 'Diffname_short',
@@ -27,23 +27,25 @@ colsToUse <- c('id', 'dataType', 'fileType', 'fileSubType', 'UID', 'biologicalSa
 colsToUseStr <- paste(colsToUse, collapse=",")
 queryTemplate <- "select %s from file where benefactorId=='syn1773109' and dataType=='%s'"
 
-rnaData <- synQuery(sprintf(queryTemplate, colsToUseStr, 'mRNA'), 
-                    blockSize=300)$collectAll()
+rnaData <- synTableQuery("SELECT * FROM syn3156503")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="mRNA")
 
-mirnaData <- synQuery(sprintf(queryTemplate, colsToUseStr, 'miRNA'), 
-                      blockSize=400)$collectAll()
+mirnaData <- synTableQuery("SELECT * FROM syn3219876")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="miRNA")
 
-methylationData <- synQuery(sprintf(queryTemplate, colsToUseStr, 'methylation'), 
-                            blockSize=400)$collectAll()
+methylationData <- synTableQuery("SELECT * FROM syn3156828")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="methylation")
 
 # Combine the data together
 allData <- rbind(rnaData, mirnaData, methylationData)
-colnames(allData) <- gsub(".*\\.", "", colnames(allData))
-allData <- allData[, colsToUse]
+allData[allData == "N/A"] <- NA
 
 allData <- allData %>%
   filter(Diffname_short %in% orderedDiffState, !is.na(Cell_Line_Type),
-         pass_qc == "true" | is.na(pass_qc))
+         pass_qc | is.na(pass_qc))
 
 ```
 
@@ -57,13 +59,25 @@ metadata <- allData %>%
 
 ```
 
+### Summary Table
+
 ```{r}
-baz <- metadata %>% 
+foo <- metadata %>% 
   select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
          Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
-    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short")) %>%
+    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
+
+bar <- foo %>% 
   group_by(Diffname_short, variable, value) %>%
-  tally %>%
+  tally
+
+groupingInfo <- bar %>%
+  ungroup %>%
+  select(one_of(c("variable", "value"))) %>%
+  unique %>% group_by(variable) %>%
+  summarize(s=paste(unique(value), collapse=","))
+
+baz <- bar %>%
   summarize(s=paste(n, collapse="/")) %>%
   dcast(variable ~ Diffname_short, value.var="s")
 
@@ -79,6 +93,14 @@ baz2[is.na(baz2)] <- 0
 
 rbind(baz, baz2) %>%
   mutate(variable=gsub("_", " ", variable)) %>%
+  kable
+```
+
+### Variable information
+```{r}
+groupingInfo %>%
+  rename(values=s) %>% 
+  mutate(variable=gsub("_", " ", variable)) %>% 
   kable
 ```
 
