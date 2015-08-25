@@ -1,0 +1,96 @@
+"""This only runs on belltown/sodo, a Sage Bionetworks cluster.
+
+"""
+
+import os
+import csv
+
+# For running synapse client, which requires python 2
+PY2VIRTENV = "/home/ubuntu/.virtualenvs/python2/bin/activate"
+
+SAMPLE_FILE = list(csv.DictReader(open("./input/sample_table.csv")))
+# SAMPLE_FILE = SAMPLE_FILE
+
+SAMPLE_DICT = dict([(x["UID"], x) for x in SAMPLE_FILE])
+
+BOWTIE_TRANSCRIPTS = "./input/transcripts/bowtie/hg19_knownGene"
+TARGET_FILE = "./input/transcripts/hg19_knownGene.fasta"
+
+# For provenance
+TARGET_FILE_SYNID = "syn3351175"
+
+BOWTIE2_SYNID = "syn3270408"
+EXPRESS_SYNID = "syn2243152"
+EXPRESS_PARENTID = "syn3270268"
+
+def get_filename(wildcards):
+    try:
+        filename = SAMPLE_DICT[wildcards[0]]['fileName']
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return filename
+
+def get_synid(wildcards):
+    try:
+        synid = SAMPLE_DICT[wildcards[0]]['id']
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return synid
+
+def get_sample_info(wildcards):
+    try:
+        info = SAMPLE_DICT[wildcards[0]]
+    except Exception as e:
+        print(e)
+        print(wildcards)
+        raise(e)
+    
+    return info
+
+rule all:
+     # input: expand('./output/eXpress/ucsc/{sample}_results.xprs', sample=SAMPLE_DICT.keys())
+     input: expand('./output/synapse/{sample}_results.txt', sample=SAMPLE_DICT.keys())
+ 
+rule bowtie_express:
+    input: './input/samples/{sample}.txt'
+    output: './output/eXpress/ucsc/{sample}_results.xprs', 
+    params: batch='-pe orte 1',python2virtenv=PY2VIRTENV,sample='{sample}',synid=get_synid,filename=get_filename,target_file=TARGET_FILE,bowtie_transcripts=BOWTIE_TRANSCRIPTS,scratchdir="/tmp"
+    threads: 8
+    shell: """## setup
+	      mkdir -p {params.scratchdir}/{params.sample}/eXpress/ ; \
+	      mkdir -p {params.scratchdir}/{params.sample}/fastq/ ; \
+	      
+              # Get files from synapse
+	      source {params.python2virtenv}; \
+              synapse get {params.synid} --downloadLocation {params.scratchdir}/{params.sample}/fastq/ ; \
+    	      deactivate ; \
+	      
+	      # Work
+	      bowtie -p {threads} -aS {params.bowtie_transcripts} <(gunzip -c {params.scratchdir}/{params.sample}/fastq/{params.filename}) | express --no-update-check --output-dir {params.scratchdir}/{params.sample}/eXpress/ {params.target_file} ; \
+	      
+	      # Save
+	      mv {params.scratchdir}/{params.sample}/eXpress/results.xprs ./output/eXpress/ucsc/{params.sample}_results.xprs 
+	      mv {params.scratchdir}/{params.sample}/eXpress/params.xprs ./output/eXpress/ucsc/{params.sample}_params.xprs 
+	      
+	      ## cleanup
+	      rm -rf {params.scratchdir}/{params.sample}/ #fastq/{params.filename}
+	      
+           """
+
+rule tosynapse:
+    input: './output/eXpress/ucsc/{sample}_results.xprs'
+    output: './output/synapse/{sample}_results.txt'
+    params: batch='',python2virtenv=PY2VIRTENV,sample='{sample}',parentId=EXPRESS_PARENTID,bowtie_synid=BOWTIE2_SYNID,express_synid=EXPRESS_SYNID,fastq_synid=get_synid,target_file_synid=TARGET_FILE_SYNID
+    threads: 1
+    shell: """## setup
+              # Put files in synapse
+	      source {params.python2virtenv}; \
+              synapse store {input} --parentId {params.parentId} --used {params.fastq_synid} {params.target_file_synid} --executed {params.bowtie_synid} {params.express_synid} && touch {output} ; \
+    	      deactivate ; \
+           """
