@@ -57,27 +57,25 @@ metadata <- allData %>%
 ```
 
 ```{r}
-foo <- metadata %>% 
+baz <- metadata %>% 
   select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
          Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
-    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
-
-
-bar <- foo %>%
+    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short")) %>%
   group_by(Diffname_short, variable, value) %>%
-  tally
-
-baz <- bar %>%
+  tally %>%
   summarize(s=paste(n, collapse="/")) %>%
   dcast(variable ~ Diffname_short, value.var="s")
 
 baz2 <- allData %>% 
   select(Diffname_short, dataType, UID) %>%
+  unique %>%
   group_by(Diffname_short, dataType) %>%
-  summarize(n=length(unique(UID))) %>%
+  tally %>%
   dcast(dataType ~ Diffname_short, value.var="n") %>%
   rename(variable=dataType)
-  
+
+baz2[is.na(baz2)] <- 0
+
 rbind(baz, baz2) %>%
   mutate(variable=gsub("_", " ", variable)) %>%
   kable
