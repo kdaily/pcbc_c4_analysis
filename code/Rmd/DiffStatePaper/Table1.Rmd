@@ -42,7 +42,7 @@ colnames(allData) <- gsub(".*\\.", "", colnames(allData))
 allData <- allData[, colsToUse]
 
 allData <- allData %>%
-  filter(Diffname_short %in% orderedDiffState)
+  filter(Diffname_short %in% orderedDiffState, !is.na(Cell_Line_Type))
 
 ```
 
