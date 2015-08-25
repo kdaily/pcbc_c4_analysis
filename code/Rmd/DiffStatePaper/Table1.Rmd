@@ -61,6 +61,8 @@ metadata <- allData %>%
 
 ### Summary Table
 
+For covariates, counts are of individual cell lines; for assays, counts are of individual experiments (cell line + differentiation state + replicate; e.g., by `UID`).
+
 ```{r}
 foo <- metadata %>% 
   select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
