@@ -75,7 +75,7 @@ groupingInfo <- bar %>%
   ungroup %>%
   select(one_of(c("variable", "value"))) %>%
   unique %>% group_by(variable) %>%
-  summarize(s=paste(unique(value), collapse=","))
+  summarize(s=paste(unique(value), collapse=", "))
 
 baz <- bar %>%
   summarize(s=paste(n, collapse="/")) %>%
