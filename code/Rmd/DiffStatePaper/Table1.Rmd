@@ -65,7 +65,7 @@ foo <- metadata %>%
 
 bar <- foo %>%
   group_by(Diffname_short, variable, value) %>%
-  summarize(n=length(unique(C4_Cell_Line_ID)))
+  tally
 
 baz <- bar %>%
   summarize(s=paste(n, collapse="/")) %>%
