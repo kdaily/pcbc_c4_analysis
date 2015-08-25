@@ -6,6 +6,7 @@ library(data.table)
 library(stringr)
 library(tidyr)
 library(reshape2)
+library(knitr)
 synapseLogin()
 
 knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
@@ -39,12 +40,15 @@ methylationData <- synQuery(sprintf(queryTemplate, colsToUseStr, 'methylation'),
 allData <- rbind(rnaData, mirnaData, methylationData)
 colnames(allData) <- gsub(".*\\.", "", colnames(allData))
 allData <- allData[, colsToUse]
+
+allData <- allData %>%
+  filter(Diffname_short %in% orderedDiffState)
+
 ```
 
 ```{r metadata}
 # Filter metadata based on unique biological samples, not UIDs
 metadata <- allData %>%
-  filter(Diffname_short %in% orderedDiffState) %>%
   select(dataType, biologicalSampleName, C4_Cell_Line_ID, Diffname_short,
          Cell_Line_Type, Reprogramming_Vector_Type, Reprogramming_Gene_Combination,
          Tissue_of_Origin, Cell_Line_Type, Gender) %>%
@@ -67,9 +71,15 @@ baz <- bar %>%
   summarize(s=paste(n, collapse="/")) %>%
   dcast(variable ~ Diffname_short, value.var="s")
 
-baz2 <- metadata %>% 
+baz2 <- allData %>% 
   select(Diffname_short, dataType, UID) %>%
+  group_by(Diffname_short, dataType) %>%
+  summarize(n=length(unique(UID))) %>%
+  dcast(dataType ~ Diffname_short, value.var="n") %>%
+  rename(variable=dataType)
   
-  
+rbind(baz, baz2) %>%
+  mutate(variable=gsub("_", " ", variable)) %>%
+  kable
 ```
 
