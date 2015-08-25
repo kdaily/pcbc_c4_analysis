@@ -65,7 +65,8 @@ metadata <- allData %>%
 foo <- metadata %>% 
   select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
          Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
-    melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
+  unique %>%
+  melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
 
 bar <- foo %>% 
   group_by(Diffname_short, variable, value) %>%
