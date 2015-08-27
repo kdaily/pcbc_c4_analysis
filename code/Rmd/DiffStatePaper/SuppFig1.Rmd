@@ -1,4 +1,4 @@
-```{r}
+```{r setup, include=FALSE}
 library(synapseClient)
 library(plyr)
 library(dplyr)
@@ -7,7 +7,15 @@ library(stringr)
 library(tidyr)
 library(reshape2)
 library(ComplexHeatmap)
+library(rGithubClient)
 synapseLogin()
+
+# Make sure to commit and push first!
+thisRepo <- getRepo('kdaily/pcbc_c4_analysis', ref="branch", refName='diffstatepaper')
+thisScript <- getPermlink(thisRepo, repositoryPath='code/Rmd/DiffStatePaper/SuppFig1.Rmd')
+
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE,
+                      fig.width=20, fig.height=30)
 
 compNames <- synTableQuery("SELECT * FROM syn4483642")@values
 
@@ -28,6 +36,15 @@ diffStateReorderFxn <- function(x, metadata, clusterings) {
 # Diff states in a sensible, quasi time-based ordering
 orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
 
+p.threshold.rna <- 0.0001
+lfc.threshold.rna <- 2
+
+p.threshold.mirna <- 0.0001
+lfc.threshold.mirna <- 2
+
+p.threshold.methylation <- 0.0001
+lfc.threshold.methylation <- 0.5
+
 ```
 
 ```{r readdegenesdata_mrna}
@@ -38,8 +55,8 @@ d <- fread(getFileLocation(obj), data.table=FALSE)
 # And significance levels as well
 d2 <- d %>% 
   rename(comparison=Comparison) %>%
-  filter(abs(logFC) > 2,
-         adj.P.value < 0.0001,
+  filter(abs(logFC) > lfc.threshold.rna,
+         adj.P.value < p.threshold.rna,
          str_detect(comparison, "^All__")) %>%
   mutate(direction=str_extract(comparison, "__.*"),
          direction=str_replace(direction, ".*__", ""),
@@ -58,20 +75,6 @@ metadata <- synTableQuery("select * from syn3156503")@values %>%
   filter(C4_Karyotype_Result != "abnormal")
 ```
 
-```{r despecificgenes_mrna}
-# Find diff state specific genes
-res <- llply(unique(d2$variable1),
-             function(x) setdiff(filter(d2, variable1 == x)$GeneSymbol, 
-                                 filter(d2, variable1 != x)$GeneSymbol))
-
-names(res) <- unique(d2$variable1)
-diffstateSpecificGenes <- ldply(res, function(x) data.frame(GeneSymbol=x), .id="diffstate")
-```
-
-```{r keepgenes_mrna}
-# Keep genes
-keepGenes <- diffstateSpecificGenes
-```
 
 ```{r getcountdata_mrna}
 countObj <- synGet("syn4483934")
@@ -111,11 +114,11 @@ metadataReordered <- ldply(orderedDiffState,
                            diffStateReorderFxn, 
                            metadata=metadata, clusterings=clusterings)
 
-countMat <- countData2[, -1]
-countMat <- scale(countMat)
-countMat <- t(scale(t(countMat)))
+countMat.rna <- countData2[, -1]
+countMat.rna <- scale(countMat.rna)
+countMat.rna <- t(scale(t(countMat.rna)))
 
-countMat <- countMat[, metadataReordered$UID]
+countMat.rna <- countMat.rna[, metadataReordered$UID]
 
 ```
 
@@ -132,22 +135,27 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
                                                             "MESO-30"="pink")))
 
 pdf('SuppFig1_mRNA.pdf')
-ht <- Heatmap(countMat, name = "log10(Expression)", 
+ht <- Heatmap(countMat.rna, name = "log10(Expression)", 
               # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
               show_column_names = FALSE,
               # row_names_gp = gpar(fontsize = 8),
               # column_names_gp = gpar(fontsize = 8),
               cluster_rows = TRUE,
-              cluster_columns = FALSE,
               clustering_method_rows = "average",
-              clustering_method_columns = "average",
               show_row_hclust = FALSE, 
               show_column_hclust = FALSE, 
               top_annotation = samplesAnnotation)
 
 print(ht)
 dev.off()
+
+suppfig1.mRNA <- synStore(File('SuppFig1_mRNA.pdf', parentId='syn4904956'),
+                          activityName="Create figure",
+                          used=c('syn4483934', 'syn4484232', 'syn3156503', 'syn4483642'), 
+                          executed=thisScript)
+
+print(ht)
 
 ```
 
@@ -159,8 +167,8 @@ d <- fread(getFileLocation(obj), data.table=FALSE)
 # And significance levels as well
 d2 <- d %>% 
   rename(comparison=Comparison) %>%
-  filter(abs(logFC) > 2,
-         adj.P.value < 0.0001,
+  filter(abs(logFC) > lfc.threshold.mirna,
+         adj.P.value < p.threshold.mirna,
          str_detect(comparison, "^All__")) %>%
   mutate(direction=str_extract(comparison, "__.*"),
          direction=str_replace(direction, ".*__", ""),
@@ -210,11 +218,11 @@ metadataReordered <- ldply(orderedDiffState,
                            diffStateReorderFxn, 
                            metadata=metadata, clusterings=clusterings)
 
-countMat <- countData2[, -1]
-countMat <- scale(countMat)
-countMat <- t(scale(t(countMat)))
+countMat.miRNA <- countData2[, -1]
+countMat.miRNA <- scale(countMat.miRNA)
+countMat.miRNA <- t(scale(t(countMat.miRNA)))
 
-countMat <- countMat[, metadataReordered$UID]
+countMat.miRNA <- countMat.miRNA[, metadataReordered$UID]
 
 ```
 
@@ -231,22 +239,24 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
                                                             "MESO-30"="pink")))
 
 pdf('SuppFig1_miRNA.pdf')
-ht <- Heatmap(countMat, name = "log10(Expression)", 
-              # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
+ht <- Heatmap(countMat.miRNA, name = "log10(Expression)", 
               show_row_names = FALSE, 
               show_column_names = FALSE,
-              # row_names_gp = gpar(fontsize = 8),
-              # column_names_gp = gpar(fontsize = 8),
               cluster_rows = TRUE,
-              cluster_columns = FALSE,
               clustering_method_rows = "average",
-              clustering_method_columns = "average",
               show_row_hclust = FALSE, 
               show_column_hclust = FALSE, 
               top_annotation = samplesAnnotation)
 
 print(ht)
 dev.off()
+
+suppfig1.miRNA <- synStore(File('SuppFig1_miRNA.pdf', parentId='syn4904956'),
+                           activityName="Create figure",
+                           used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
+                           executed=thisScript)
+
+print(ht)
 
 ```
 
@@ -258,8 +268,8 @@ d <- fread(getFileLocation(obj), data.table=FALSE)
 # And significance levels as well
 d2 <- d %>% 
   rename(GeneSymbol=methProbeIDs, comparison=Comparison) %>%
-  filter(abs(logFC) > 0.5,
-         adj.P.value < 0.0001,
+  filter(abs(logFC) > lfc.threshold.methylation,
+         adj.P.value < p.threshold.methylation,
          str_detect(comparison, "^All__")) %>%
   mutate(direction=str_extract(comparison, "__.*"),
          direction=str_replace(direction, ".*__", ""),
@@ -307,11 +317,11 @@ metadataReordered <- ldply(orderedDiffState,
                            diffStateReorderFxn, 
                            metadata=metadata, clusterings=clusterings)
 
-countMat <- countData2[, -1]
-countMat <- scale(countMat)
-countMat <- t(scale(t(countMat)))
+countMat.methylation <- countData2[, -1]
+countMat.methylation <- scale(countMat.methylation)
+countMat.methylation <- t(scale(t(countMat.methylation)))
 
-countMat <- countMat[, metadataReordered$UID]
+countMat.methylation <- countMat.methylation[, metadataReordered$UID]
 
 ```
 
@@ -328,7 +338,7 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
                                                             "MESO-30"="pink")))
 
 pdf('SuppFig1_methylation.pdf')
-ht <- Heatmap(countMat, name = "log10(Expression)", 
+ht <- Heatmap(countMat.methylation, name = "log10(Expression)", 
               # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
               show_column_names = FALSE,
@@ -345,4 +355,13 @@ ht <- Heatmap(countMat, name = "log10(Expression)",
 print(ht)
 dev.off()
 
+suppfig1.miRNA <- synStore(File('SuppFig1_methylation.pdf', parentId='syn4904956'),
+                           activityName="Create figure",
+                           used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
+                           executed=thisScript)
+
 ```
+
+## Supplementary Figure 1a
+
+The log CPM (counts per million) matrix for RNA-seq (syn4483934), $log_10$ count matrix for miRNA-seq (syn3355993) and $\beta$ values for methylation (syn4527629) were used for visualization of global patterns across differentiation states. Only differentially expressed genes between any pair of differentiation states were used (mRNA: syn4484232; miRNA:; methylation: ; mRNA log fold change $>`r lfc.threshold.rna`$ and adjusted $p$-value $<`r p.threshold.rna`$; $n=`r nrow(countMat)`$ genes; miRNA log fold change $>`r lfc.threshold.mirna`$ and adjusted $p$-value $<`r p.threshold.mirna`$; $n=`r nrow(countMat.miRNA)`$ miRNAs; methylation log fold change $>`r lfc.threshold.methylation`$ and adjusted $p$-value $<`r p.threshold.methylation`$; $n=`r nrow(countMat.methylation)`$ probes;). For each assay, features (e.g., genes, miRNA's and methylation probes, respectively) were clustered using hierarchical clustering (Euclidean distance and average agglomeration method). The samples were clustered using hierarchical clustering (Euclidean distance and average agglomeration method) within each differentiation state. The differentiation states were then ordered temporally with respect to the level of differentiation. 
