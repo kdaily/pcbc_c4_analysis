@@ -10,8 +10,12 @@ library(ComplexHeatmap)
 library(rGithubClient)
 synapseLogin()
 
+# # knit this file to synapse, will create figs with provenance, and output html
+# # with figures and captions
+# knit2synapse::knitfile2synapse('code/Rmd/DiffStatePaper/SuppFig1.Rmd', owner='syn4909485', overwrite=TRUE)
+
 # Make sure to commit and push first!
-thisRepo <- getRepo('kdaily/pcbc_c4_analysis', ref="branch", refName='diffstatepaper')
+thisRepo <- getRepo('kdaily/pcbc_c4_analysis', ref="branch", refName='updatefig1')
 thisScript <- getPermlink(thisRepo, repositoryPath='code/Rmd/DiffStatePaper/SuppFig1.Rmd')
 
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE,
@@ -136,12 +140,10 @@ samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
 
 pdf('SuppFig1_mRNA.pdf')
 ht <- Heatmap(countMat.rna, name = "log10(Expression)", 
-              # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
               show_column_names = FALSE,
-              # row_names_gp = gpar(fontsize = 8),
-              # column_names_gp = gpar(fontsize = 8),
               cluster_rows = TRUE,
+              cluster_columns = FALSE,
               clustering_method_rows = "average",
               show_row_hclust = FALSE, 
               show_column_hclust = FALSE, 
@@ -355,11 +357,12 @@ ht <- Heatmap(countMat.methylation, name = "log10(Expression)",
 print(ht)
 dev.off()
 
-suppfig1.miRNA <- synStore(File('SuppFig1_methylation.pdf', parentId='syn4904956'),
-                           activityName="Create figure",
-                           used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
-                           executed=thisScript)
+suppfig1.methylation <- synStore(File('SuppFig1_methylation.pdf', parentId='syn4904956'),
+                                 activityName="Create figure",
+                                 used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
+                                 executed=thisScript)
 
+print(ht)
 ```
 
 ## Supplementary Figure 1a
