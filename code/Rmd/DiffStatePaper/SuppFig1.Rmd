@@ -39,6 +39,9 @@ diffStateReorderFxn <- function(x, metadata, clusterings) {
 
 # Diff states in a sensible, quasi time-based ordering
 orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
+diffStateColors <- c("SC"="orange", "EB"="red", "DE"="yellow",
+                     "MESO-5"="green", "MESO-15"="blue", "MESO-30"="pink",
+                     "ECTO"="black")
 
 p.threshold.rna <- 0.0001
 lfc.threshold.rna <- 2
@@ -126,17 +129,13 @@ countMat.rna <- countMat.rna[, metadataReordered$UID]
 
 ```
 
-```{r plot_mrna}
+```{r plot_mrna, include=FALSE}
 dfAnnotations <- metadataReordered %>% 
   rename(DiffState=Diffname_short) %>%
   select(DiffState)
 
 samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
-                                       col=list(DiffState=c("EB"="red", "ECTO"="blue", 
-                                                            "SC"="orange", "DE"="yellow",
-                                                            "MESO-5"="black", 
-                                                            "MESO-15"="green",
-                                                            "MESO-30"="pink")))
+                                       col=list(DiffState=diffStateColors))
 
 pdf('SuppFig1_mRNA.pdf')
 ht <- Heatmap(countMat.rna, name = "log10(Expression)", 
@@ -152,12 +151,12 @@ ht <- Heatmap(countMat.rna, name = "log10(Expression)",
 print(ht)
 dev.off()
 
-suppfig1.mRNA <- synStore(File('SuppFig1_mRNA.pdf', parentId='syn4904956'),
+suppfig1.mRNA <- synStore(File('SuppFig1_mRNA.pdf', parentId='syn4909485'),
                           activityName="Create figure",
                           used=c('syn4483934', 'syn4484232', 'syn3156503', 'syn4483642'), 
                           executed=thisScript)
 
-print(ht)
+# print(ht)
 
 ```
 
@@ -228,23 +227,20 @@ countMat.miRNA <- countMat.miRNA[, metadataReordered$UID]
 
 ```
 
-```{r plot_mirna}
+```{r plot_mirna, include=FALSE}
 dfAnnotations <- metadataReordered %>% 
   rename(DiffState=Diffname_short) %>%
   select(DiffState)
 
 samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
-                                       col=list(DiffState=c("EB"="red", "ECTO"="blue", 
-                                                            "SC"="orange", "DE"="yellow",
-                                                            "MESO-5"="black", 
-                                                            "MESO-15"="green",
-                                                            "MESO-30"="pink")))
+                                       col=list(DiffState=diffStateColors))
 
 pdf('SuppFig1_miRNA.pdf')
 ht <- Heatmap(countMat.miRNA, name = "log10(Expression)", 
               show_row_names = FALSE, 
               show_column_names = FALSE,
               cluster_rows = TRUE,
+              cluster_columns = FALSE,
               clustering_method_rows = "average",
               show_row_hclust = FALSE, 
               show_column_hclust = FALSE, 
@@ -253,12 +249,12 @@ ht <- Heatmap(countMat.miRNA, name = "log10(Expression)",
 print(ht)
 dev.off()
 
-suppfig1.miRNA <- synStore(File('SuppFig1_miRNA.pdf', parentId='syn4904956'),
+suppfig1.miRNA <- synStore(File('SuppFig1_miRNA.pdf', parentId='syn4909485'),
                            activityName="Create figure",
                            used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
                            executed=thisScript)
 
-print(ht)
+# print(ht)
 
 ```
 
@@ -305,8 +301,6 @@ countData <- countData %>%
 countData2 <- countData
 rownames(countData2) <- countData2$GeneSymbol
 
-# countData2[, -1] <- log10(countData2[, -1] + 0.001)
-
 ```
 
 ```{r cluster_methylation}
@@ -320,27 +314,23 @@ metadataReordered <- ldply(orderedDiffState,
                            metadata=metadata, clusterings=clusterings)
 
 countMat.methylation <- countData2[, -1]
-countMat.methylation <- scale(countMat.methylation)
-countMat.methylation <- t(scale(t(countMat.methylation)))
+# countMat.methylation <- scale(countMat.methylation)
+# countMat.methylation <- t(scale(t(countMat.methylation)))
 
 countMat.methylation <- countMat.methylation[, metadataReordered$UID]
 
 ```
 
-```{r plot_methylation}
+```{r plot_methylation, include=FALSE}
 dfAnnotations <- metadataReordered %>% 
   rename(DiffState=Diffname_short) %>%
   select(DiffState)
 
 samplesAnnotation <- HeatmapAnnotation(df=dfAnnotations,
-                                       col=list(DiffState=c("EB"="red", "ECTO"="blue", 
-                                                            "SC"="orange", "DE"="yellow",
-                                                            "MESO-5"="black", 
-                                                            "MESO-15"="green",
-                                                            "MESO-30"="pink")))
+                                       col=list(DiffState=diffStateColors))
 
 pdf('SuppFig1_methylation.pdf')
-ht <- Heatmap(countMat.methylation, name = "log10(Expression)", 
+ht <- Heatmap(countMat.methylation, name = "Beta", 
               # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
               show_row_names = FALSE, 
               show_column_names = FALSE,
@@ -357,14 +347,14 @@ ht <- Heatmap(countMat.methylation, name = "log10(Expression)",
 print(ht)
 dev.off()
 
-suppfig1.methylation <- synStore(File('SuppFig1_methylation.pdf', parentId='syn4904956'),
+suppfig1.methylation <- synStore(File('SuppFig1_methylation.pdf', parentId='syn4909485'),
                                  activityName="Create figure",
                                  used=c('syn3355993', 'syn3219876', 'syn4609631', 'syn4483642'), 
                                  executed=thisScript)
 
-print(ht)
+# print(ht)
 ```
 
 ## Supplementary Figure 1a
 
-The log CPM (counts per million) matrix for RNA-seq (syn4483934), $log_10$ count matrix for miRNA-seq (syn3355993) and $\beta$ values for methylation (syn4527629) were used for visualization of global patterns across differentiation states. Only differentially expressed genes between any pair of differentiation states were used (mRNA: syn4484232; miRNA:; methylation: ; mRNA log fold change $>`r lfc.threshold.rna`$ and adjusted $p$-value $<`r p.threshold.rna`$; $n=`r nrow(countMat)`$ genes; miRNA log fold change $>`r lfc.threshold.mirna`$ and adjusted $p$-value $<`r p.threshold.mirna`$; $n=`r nrow(countMat.miRNA)`$ miRNAs; methylation log fold change $>`r lfc.threshold.methylation`$ and adjusted $p$-value $<`r p.threshold.methylation`$; $n=`r nrow(countMat.methylation)`$ probes;). For each assay, features (e.g., genes, miRNA's and methylation probes, respectively) were clustered using hierarchical clustering (Euclidean distance and average agglomeration method). The samples were clustered using hierarchical clustering (Euclidean distance and average agglomeration method) within each differentiation state. The differentiation states were then ordered temporally with respect to the level of differentiation. 
+The $\log$ CPM (counts per million) matrix for RNA-seq (syn4483934), $\log_{10}$ count matrix for miRNA-seq (syn3355993) and $\beta$ values for methylation (syn4527629) were used for visualization of global patterns across differentiation states. Only differentially expressed genes between any pair of differentiation states were used (mRNA: syn4484232; miRNA:; methylation: ; mRNA log fold change $>`r lfc.threshold.rna`$ and adjusted $p$-value $<`r p.threshold.rna`$; $n=`r nrow(countMat.rna)`$ genes; miRNA log fold change $>`r lfc.threshold.mirna`$ and adjusted $p$-value $<`r p.threshold.mirna`$; $n=`r nrow(countMat.miRNA)`$ miRNAs; methylation log fold change $>`r lfc.threshold.methylation`$ and adjusted $p$-value $<`r p.threshold.methylation`$; $n=`r nrow(countMat.methylation)`$ probes). For each assay, features (e.g., genes, miRNA's and methylation probes, respectively) were clustered using hierarchical clustering (Euclidean distance and average agglomeration method). The samples were clustered using hierarchical clustering (Euclidean distance and average agglomeration method) within each differentiation state. The differentiation states were then ordered temporally with respect to the level of differentiation. 
