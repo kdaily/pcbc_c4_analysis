@@ -16,7 +16,7 @@ library(rGithubClient)
 
 thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
                     ref='branch', refName='uniquediffexprfeats')
-thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffstatePaper/uniquedefeats.Rmd')
+thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/uniquedefeats.Rmd')
 
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
 
