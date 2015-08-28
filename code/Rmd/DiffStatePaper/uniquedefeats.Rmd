@@ -1,6 +1,7 @@
 ```{r knit2synapse, include=FALSE, eval=FALSE}
 library(synapseClient)
-knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/uniquedefeats.Rmd", owner="", overwrite=TRUE)
+knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/uniquedefeats.Rmd", 
+                               owner="syn4913739", overwrite=TRUE)
 ```
 
 ```{r setup, include=FALSE}
@@ -149,13 +150,23 @@ diffstateSpecificmethylation <- ldply(res,
 ```
 
 ## Differentially expressed genes unique to a differentiation state
-
 ```{r}
-rbind(diffstateSpecificGenes, 
-      diffstateSpecificmiRNAs,
-      diffstateSpecificmethylation) %>% 
+diffstateSpecificFeatures <- rbind(diffstateSpecificGenes, 
+                                   diffstateSpecificmiRNAs,
+                                   diffstateSpecificmethylation) 
+
+write.csv(diffstateSpecificFeatures, file="diffstateSpecificFeatures.csv")
+```
+```{r synstore}
+f <- synStore(File("diffstateSpecificFeatures.csv", parentId='syn4640410'),
+              used=c('syn4483642', 'syn3156828', 'syn4527629', 'syn3219876',
+                     'syn4609631', 'syn3156503', 'syn4484232'),
+              executed=thisScript)
+```
+See results in `r f@properties$id`.
+```{r table}
+diffstateSpecificFeatures %>% 
   count(diffstate, assay) %>%
   dcast(assay ~ diffstate, value.var = 'n', fun.aggregate=sum, margins="diffstate") %>%
   kable(caption="Count of features in each assay per differentiation state.")
 ```
-
