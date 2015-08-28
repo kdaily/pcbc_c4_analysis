@@ -1,0 +1,161 @@
+```{r knit2synapse, include=FALSE, eval=FALSE}
+library(synapseClient)
+knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/uniquedefeats.Rmd", owner="", overwrite=TRUE)
+```
+
+```{r setup, include=FALSE}
+library(synapseClient)
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(reshape2)
+library(knitr)
+library(rGithubClient)
+
+thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
+                    ref='branch', refName='uniquediffexprfeats')
+thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffstatePaper/uniquedefeats.Rmd')
+
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+
+synapseLogin()
+
+compNames <- synTableQuery("SELECT * FROM syn4483642")@values
+
+# Diff states in a sensible, quasi time-based ordering
+orderedDiffState <- c("SC", "DE", "MESO-5", "ECTO", "EB", "MESO-15", "MESO-30")
+
+thresh.p.mrna <- 0.0001
+thresh.lfc.mrna <- 2
+
+thresh.p.mirna <- 0.0001
+thresh.lfc.mirna <- 2
+
+thresh.p.methylation <- 0.001
+thresh.lfc.methylation <- 0.4
+
+```
+
+```{r mrna}
+obj <- synGet("syn4484232")
+d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2 <- d %>% 
+  rename(feature=GeneSymbol, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.mrna,
+         adj.P.value < thresh.p.mrna,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short")
+
+metadata <- synTableQuery("select * from syn3156503")@values %>%
+  filter(Diffname_short != "") %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(pass_qc == "TRUE") %>%
+  filter(exclude != "TRUE") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+
+# Find diff state specific genes
+diffStateLevels <- unique(c(d2$variable1, d2$variable2))
+res <- llply(diffStateLevels,
+             function(x) setdiff(filter(d2, variable1 == x | variable2 == x)$feature, 
+                                 filter(d2, variable1 != x & variable2 != x)$feature))
+
+names(res) <- diffStateLevels
+diffstateSpecificGenes <- ldply(res, 
+                                function(x) data.frame(feature=x, assay="mRNA"),
+                                .id="diffstate")
+```
+
+```{r mirna}
+obj <- synGet("syn4609631")
+d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2 <- d %>% 
+  rename(feature=GeneSymbol, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.mirna,
+         adj.P.value < thresh.p.mirna,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short")
+
+metadata <- synTableQuery("select * from syn3219876")@values %>%
+  filter(Diffname_short != "") %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(pass_qc == "TRUE") %>%
+  filter(exclude != "TRUE") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+
+# Find diff state specific genes
+diffStateLevels <- unique(c(d2$variable1, d2$variable2))
+res <- llply(diffStateLevels,
+             function(x) setdiff(filter(d2, variable1 == x | variable2 == x)$feature, 
+                                 filter(d2, variable1 != x & variable2 != x)$feature))
+
+names(res) <- diffStateLevels
+diffstateSpecificmiRNAs <- ldply(res,
+                                 function(x) data.frame(feature=x, assay="miRNA"),
+                                 .id="diffstate")
+
+```
+
+```{r methylation}
+obj <- synGet("syn4527629")
+d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2 <- d %>% 
+  rename(feature=methProbeIDs, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.methylation,
+         adj.P.value < thresh.p.methylation,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short")
+
+metadata <- synTableQuery("select * from syn3156828")@values %>%
+  filter(Diffname_short != "") %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(C4_Karyotype_Result != "abnormal")
+
+# Find diff state specific genes
+diffStateLevels <- unique(c(d2$variable1, d2$variable2))
+res <- llply(diffStateLevels,
+             function(x) setdiff(filter(d2, variable1 == x | variable2 == x)$feature, 
+                                 filter(d2, variable1 != x & variable2 != x)$feature))
+
+names(res) <- diffStateLevels
+diffstateSpecificmethylation <- ldply(res, 
+                                      function(x) data.frame(feature=x, assay="methylation"), 
+                                      .id="diffstate")
+```
+
+## Differentially expressed genes unique to a differentiation state
+
+```{r}
+rbind(diffstateSpecificGenes, 
+      diffstateSpecificmiRNAs,
+      diffstateSpecificmethylation) %>% 
+  count(diffstate, assay) %>%
+  dcast(assay ~ diffstate, value.var = 'n', fun.aggregate=sum, margins="diffstate") %>%
+  kable(caption="Count of features in each assay per differentiation state.")
+```
+
