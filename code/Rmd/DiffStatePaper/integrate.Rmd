@@ -1,0 +1,182 @@
+```{r knit2synapse, include=FALSE, eval=FALSE}
+# library(synapseClient)
+# knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/uniquedefeats.Rmd", 
+#                                owner="syn4913739", overwrite=TRUE)
+```
+
+```{r setup, include=FALSE}
+library(synapseClient)
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(reshape2)
+library(knitr)
+library(rGithubClient)
+library(biomaRt)
+thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
+                    ref='branch', refName='uniquediffexprfeats')
+thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/uniquedefeats.Rmd')
+
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+
+synapseLogin()
+
+compNames <- synTableQuery("SELECT * FROM syn4483642")@values
+
+# Diff states in a sensible, quasi time-based ordering
+orderedDiffState <- c("SC", "DE", "MESO-5", "ECTO", "EB", "MESO-15", "MESO-30")
+
+thresh.p.mrna <- 0.0001
+thresh.lfc.mrna <- 2
+
+thresh.p.mirna <- 0.0001
+thresh.lfc.mirna <- 2
+
+thresh.p.methylation <- 0.001
+thresh.lfc.methylation <- 0.4
+
+```
+
+```{r mrna}
+usedIds <- c()
+
+obj <- synGet("syn4484232")
+usedIds <- c(usedIds, obj@properties$id)
+
+d.mrna <- fread(getFileLocation(obj), data.table=FALSE, 
+                showProgress = FALSE) %>% 
+    mutate(assay='mRNA')
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2.mrna <- d.mrna %>%
+  rename(feature=GeneSymbol, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.mrna,
+         adj.P.value < thresh.p.mrna,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short") %>%
+  dplyr::select(assay, feature) %>%
+  unique
+
+```
+
+```{r mirna}
+
+obj <- synGet("syn4609631")
+usedIds <- c(usedIds, obj@properties$id)
+
+d.mirna <- fread(getFileLocation(obj), data.table=FALSE, 
+                 showProgress = FALSE) %>%
+  mutate(assay='miRNA')
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2.mirna <- d.mirna %>%
+  rename(feature=GeneSymbol, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.mirna,
+         adj.P.value < thresh.p.mirna,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short")
+
+d3.mirna <- d2.mirna %>%
+  melt(id.vars=c("assay", "feature"), 
+       measure.vars=c("variable1", "variable2")) %>%
+  unique
+
+# Get miRNA mapping files
+DMAP.ID = 'syn3461627'
+usedIds <- c(usedIds, DMAP.ID)
+DMAP = fread(synGet(DMAP.ID)@filePath, data.table=F, header=F)
+setnames(DMAP, c('V1','V2'), c('hsa_id','ensembl_gene_id'))
+
+DMAP <- filter(DMAP, hsa_id %in% d2.mirna$feature)
+
+# Get human related mapping
+Hs = useMart("ENSEMBL_MART_ENSEMBL", host="www.ensembl.org") # use this one when biomart.org is down
+Hs = useDataset("hsapiens_gene_ensembl", Hs)
+human_ensg2symbol = getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                          filters = "ensembl_gene_id",                         
+                          values = unique(DMAP$ensembl_gene_id),
+                          mart = Hs)
+
+DMAP <- left_join(DMAP, human_ensg2symbol, by = 'ensembl_gene_id') %>%
+  rename(feature=hsa_id) %>% dplyr::select(feature, hgnc_symbol)
+
+d4.mirna <- d3.mirna %>% left_join(DMAP) 
+
+edges.mirna <- d4.mirna %>% 
+  dplyr::select(assay, feature, hgnc_symbol) %>%
+  rename(target=hgnc_symbol) %>%
+  unique
+
+d5.mirna <- d4.mirna %>%
+  dplyr::select(assay, hgnc_symbol) %>%
+  rename(feature=hgnc_symbol) %>%
+  filter(feature != "") %>%
+  unique
+
+```
+
+```{r methylation}
+obj <- synGet("syn4527629")
+d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+
+# Filter out the comparisons we're interested in
+# And significance levels as well
+d2.methylation <- d %>% 
+  mutate(assay='methylation') %>% 
+  rename(feature=methProbeIDs, comparison=Comparison) %>%
+  filter(abs(logFC) > thresh.lfc.methylation,
+         adj.P.value < thresh.p.methylation,
+         str_detect(comparison, "^All__")) %>%
+  mutate(direction=str_extract(comparison, "__.*"),
+         direction=str_replace(direction, ".*__", ""),
+         comparison=str_replace(comparison, "__up", ""),
+         comparison=str_replace(comparison, "__down", "")) %>%
+  left_join(compNames) %>%
+  filter(class == "Diffname_short") %>%
+  melt(id.vars=c("feature", "nearestTx", "assay", "direction"),
+       measure.vars=c("variable1", "variable2")) %>%
+  unique
+
+edges.methylation <- d2.methylation %>% 
+  dplyr::select(assay, feature, nearestTx) %>%
+  rename(target=nearestTx) %>% 
+  unique
+
+d3.methylation <- d2.methylation %>%
+  dplyr::select(assay, nearestTx) %>%
+  rename(feature=nearestTx) %>%
+  unique
+```
+
+```{r}
+final <- rbind(d2.mrna, d5.mirna, d3.methylation) %>%
+  dcast(feature ~ assay, value.var='feature', fun.aggregate=length) %>%
+  filter((methylation > 0 & mRNA > 0) | (miRNA > 0 & mRNA > 0))
+
+```
+
+```{r}
+write.csv(final, file="integratedDEFeatures.csv")
+```
+
+```{r synstore}
+f <- synStore(File("diffstateSpecificFeatures.csv", parentId='syn4640410'),
+              used=c('syn4483642', 'syn3156828', 'syn4527629', 'syn3219876',
+                     'syn4609631', 'syn3156503', 'syn4484232'),
+              executed=thisScript)
+```
+See results in `r f@properties$id`.
