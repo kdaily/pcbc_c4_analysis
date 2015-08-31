@@ -1,6 +1,6 @@
 ```{r knit2synapse, include=FALSE, eval=FALSE}
 # library(synapseClient)
-# knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/uniquedefeats.Rmd", 
+# knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/integrate.Rmd", 
 #                                owner="syn4913739", overwrite=TRUE)
 ```
 
@@ -16,8 +16,8 @@ library(knitr)
 library(rGithubClient)
 library(biomaRt)
 thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
-                    ref='branch', refName='uniquediffexprfeats')
-thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/uniquedefeats.Rmd')
+                    ref='branch', refName='comparisonlist')
+thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/integrate.Rmd')
 
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
 
