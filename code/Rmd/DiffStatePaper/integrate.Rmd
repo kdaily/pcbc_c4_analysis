@@ -112,7 +112,8 @@ human_ensg2symbol = getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
                           mart = Hs)
 
 DMAP <- left_join(DMAP, human_ensg2symbol, by = 'ensembl_gene_id') %>%
-  rename(feature=hsa_id) %>% dplyr::select(feature, hgnc_symbol)
+  rename(feature=hsa_id) %>% 
+  dplyr::select(feature, hgnc_symbol)
 
 d4.mirna <- d3.mirna %>% left_join(DMAP) 
 
@@ -132,6 +133,7 @@ d5.mirna <- d4.mirna %>%
 ```{r methylation}
 obj <- synGet("syn4527629")
 d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+usedIds <- c(usedIds, obj@properties$id)
 
 # Filter out the comparisons we're interested in
 # And significance levels as well
@@ -174,9 +176,8 @@ write.csv(final, file="integratedDEFeatures.csv")
 ```
 
 ```{r synstore}
-f <- synStore(File("diffstateSpecificFeatures.csv", parentId='syn4640410'),
-              used=c('syn4483642', 'syn3156828', 'syn4527629', 'syn3219876',
-                     'syn4609631', 'syn3156503', 'syn4484232'),
+f <- synStore(File("integratedDEFeatures.csv", parentId='syn4640410'),
+              used=usedIds,
               executed=thisScript)
 ```
 See results in `r f@properties$id`.
