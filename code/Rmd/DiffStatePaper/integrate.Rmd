@@ -6,6 +6,7 @@
 
 ```{r setup, include=FALSE}
 library(synapseClient)
+library(biomaRt) # use of biomaRt interferes w/ dplyr select ,so load it early
 library(plyr)
 library(dplyr)
 library(data.table)
@@ -13,8 +14,13 @@ library(stringr)
 library(tidyr)
 library(reshape2)
 library(knitr)
+library(ComplexHeatmap)
 library(rGithubClient)
-library(biomaRt)
+library(igraph)
+library(RColorBrewer)
+
+set.seed(4)
+
 thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
                     ref='branch', refName='comparisonlist')
 thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/integrate.Rmd')
@@ -23,6 +29,7 @@ knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
 
 synapseLogin()
 
+# Standardized comparison names and levels
 compNames <- synTableQuery("SELECT * FROM syn4483642")@values
 
 # Diff states in a sensible, quasi time-based ordering
@@ -35,13 +42,18 @@ thresh.p.mirna <- 0.0001
 thresh.lfc.mirna <- 2
 
 thresh.p.methylation <- 0.001
-thresh.lfc.methylation <- 0.4
+thresh.lfc.methylation <- 0.3
+
+usedIds <- c()
+
+Hs <- biomaRt::useMart("ENSEMBL_MART_ENSEMBL", 
+                      host="www.ensembl.org") # use this one when biomart.org is down
+
+Hs <- biomaRt::useDataset("hsapiens_gene_ensembl", Hs)
 
 ```
 
 ```{r mrna}
-usedIds <- c()
-
 obj <- synGet("syn4484232")
 usedIds <- c(usedIds, obj@properties$id)
 
@@ -61,14 +73,16 @@ d2.mrna <- d.mrna %>%
          comparison=str_replace(comparison, "__up", ""),
          comparison=str_replace(comparison, "__down", "")) %>%
   left_join(compNames) %>%
-  filter(class == "Diffname_short") %>%
+  filter(class == "Diffname_short")
+
+# Common set of columns of differentially expressed features
+d3.mrna <- d2.mrna %>%
   dplyr::select(assay, feature) %>%
   unique
 
 ```
 
 ```{r mirna}
-
 obj <- synGet("syn4609631")
 usedIds <- c(usedIds, obj@properties$id)
 
@@ -90,11 +104,6 @@ d2.mirna <- d.mirna %>%
   left_join(compNames) %>%
   filter(class == "Diffname_short")
 
-d3.mirna <- d2.mirna %>%
-  melt(id.vars=c("assay", "feature"), 
-       measure.vars=c("variable1", "variable2")) %>%
-  unique
-
 # Get miRNA mapping files
 DMAP.ID = 'syn3461627'
 usedIds <- c(usedIds, DMAP.ID)
@@ -104,24 +113,24 @@ setnames(DMAP, c('V1','V2'), c('hsa_id','ensembl_gene_id'))
 DMAP <- filter(DMAP, hsa_id %in% d2.mirna$feature)
 
 # Get human related mapping
-Hs = useMart("ENSEMBL_MART_ENSEMBL", host="www.ensembl.org") # use this one when biomart.org is down
-Hs = useDataset("hsapiens_gene_ensembl", Hs)
-human_ensg2symbol = getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
-                          filters = "ensembl_gene_id",                         
-                          values = unique(DMAP$ensembl_gene_id),
-                          mart = Hs)
+human_ensg2symbol = biomaRt::getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                                   filters = "ensembl_gene_id",                         
+                                   values = unique(DMAP$ensembl_gene_id),
+                                   mart = Hs)
 
 DMAP <- left_join(DMAP, human_ensg2symbol, by = 'ensembl_gene_id') %>%
   rename(feature=hsa_id) %>% 
   dplyr::select(feature, hgnc_symbol)
 
-d4.mirna <- d3.mirna %>% left_join(DMAP) 
+# Add gene symbols
+d3.mirna <- d2.mirna %>% left_join(DMAP) 
 
-edges.mirna <- d4.mirna %>% 
-  dplyr::select(assay, feature, hgnc_symbol) %>%
-  rename(target=hgnc_symbol) %>%
+d4.mirna <- d3.mirna %>%
+  melt(id.vars=c("assay", "feature", "comparison", "direction", "hgnc_symbol"), 
+       measure.vars=c("variable1", "variable2")) %>%
   unique
 
+# Convert to have consistent columns with other assays
 d5.mirna <- d4.mirna %>%
   dplyr::select(assay, hgnc_symbol) %>%
   rename(feature=hgnc_symbol) %>%
@@ -129,6 +138,40 @@ d5.mirna <- d4.mirna %>%
   unique
 
 ```
+
+```{r mrna_mirna_filter}
+# Filter miRNAs that have opposite differential expression
+# than mRNA target and the mRNA is downregulated
+
+# First, get common columns from mRNA and miRNA data
+# Use dummy target for mRNA since it doesn't really have one
+tmp.mrna <- d2.mrna %>% 
+  dplyr::select(feature, comparison, variable1, variable2, direction) %>%
+  rename(hgnc_symbol=feature) %>%
+  rename(mrna_direction=direction)
+
+# Using the miRNA-mRNA mapped data, get the same columns
+# This time, the target is the mRNA
+tmp.mirna <- d3.mirna %>% 
+  dplyr::select(hgnc_symbol, feature, comparison, variable1, variable2, direction) %>%
+  rename(mirna_direction=direction) %>% 
+  unique
+
+# Combine the mrna and mirna data by gene and comparison
+tmp <- tmp.mirna %>% 
+  left_join(tmp.mrna) %>%
+  filter(!is.na(mrna_direction), !is.na(mirna_direction))
+
+# Filter for down-regulated (if the diff state we're interested in is listed
+# second, then it's up-regulated)
+foo <- llply(orderedDiffState, 
+             function(x) filter(tmp, (variable1 == x & mrna_direction == "down" & mirna_direction == "up") | (variable2 == x & mrna_direction == "up" & mirna_direction == "down")))
+
+names(foo) <- orderedDiffState
+downreg.mrna.mirna <- ldply(foo, I, .id="variable") %>% unique
+
+```
+
 
 ```{r methylation}
 obj <- synGet("syn4527629")
@@ -148,26 +191,60 @@ d2.methylation <- d %>%
          comparison=str_replace(comparison, "__up", ""),
          comparison=str_replace(comparison, "__down", "")) %>%
   left_join(compNames) %>%
-  filter(class == "Diffname_short") %>%
+  filter(class == "Diffname_short")
+
+d3.methylation <- d2.methylation %>%
   melt(id.vars=c("feature", "nearestTx", "assay", "direction"),
        measure.vars=c("variable1", "variable2")) %>%
   unique
 
-edges.methylation <- d2.methylation %>% 
-  dplyr::select(assay, feature, nearestTx) %>%
-  rename(target=nearestTx) %>% 
-  unique
-
-d3.methylation <- d2.methylation %>%
+# Convert to have consistent columns with other assays
+d4.methylation <- d3.methylation %>%
   dplyr::select(assay, nearestTx) %>%
   rename(feature=nearestTx) %>%
   unique
 ```
 
+```{r mrna_methyl_filter}
+# Filter methylation probes that have opposite differential expression
+# than mRNA target
+
+# First, get common columns from mRNA and methylation data
+# Use dummy target for mRNA since it doesn't really have one
+tmp.mrna <- d2.mrna %>% 
+  dplyr::select(feature, comparison, variable1, variable2, direction) %>%
+  rename(hgnc_symbol=feature) %>%
+  rename(mrna_direction=direction)
+
+# Using the methyl-mRNA mapped data, get the same columns
+# This time, the target is the mRNA
+tmp.methylation <- d2.methylation %>% 
+  dplyr::select(nearestTx, feature, comparison, variable1, variable2, direction) %>%
+  rename(hgnc_symbol=nearestTx, methylation_direction=direction) %>% 
+  unique
+
+tmp.mrna.methylation <- tmp.methylation %>% 
+  left_join(tmp.mrna) %>%
+  filter(!is.na(mrna_direction), !is.na(methylation_direction))
+
+foo <- llply(orderedDiffState, 
+             function(x) filter(tmp.mrna.methylation, (variable1 == x & mrna_direction == "down" & methylation_direction == "up") | (variable2 == x & mrna_direction == "up" & methylation_direction == "down")))
+
+names(foo) <- orderedDiffState
+downreg.mrna.methylation <- ldply(foo, I, .id="variable") %>%
+  unique
+
+```
+
 ```{r}
-final <- rbind(d2.mrna, d5.mirna, d3.methylation) %>%
+# Filter based on methyl + mRNA or miRNA + mRNA differential expression
+final <- rbind(d3.mrna, d5.mirna, d4.methylation) %>%
   dcast(feature ~ assay, value.var='feature', fun.aggregate=length) %>%
   filter((methylation > 0 & mRNA > 0) | (miRNA > 0 & mRNA > 0))
+
+downreg.mrna <- d3.mrna %>% 
+  filter(feature %in% c(downreg.mrna.mirna$hgnc_symbol, 
+                        downreg.mrna.methylation$hgnc_symbol))
 
 ```
 
@@ -180,4 +257,145 @@ f <- synStore(File("integratedDEFeatures.csv", parentId='syn4640410'),
               used=usedIds,
               executed=thisScript)
 ```
+
 See results in `r f@properties$id`.
+
+### Genes downregulated by miRNAs or methylation
+
+Data was clustered with k-means using n = 10 cluster centers.
+The data was submitted to ToppCluster for enrichment analysis.
+
+```{r plotheatmap, fig.width=20, fig.height=15}
+keepGenes <- downreg.mrna$feature
+
+metadata <- synTableQuery("select * from syn3156503")@values %>%
+  filter(Diffname_short != "") %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(pass_qc == "TRUE") %>%
+  filter(exclude != "TRUE") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+
+countObj <- synGet("syn4483934")
+
+countData <- fread(getFileLocation((countObj)), data.table=FALSE) %>%
+  rename(GeneSymbol=GeneName) %>%
+  filter(GeneSymbol %in% keepGenes)
+
+rownames(countData) <- countData$GeneSymbol
+
+existingUIDs <- intersect(colnames(countData), metadata$UID)
+
+metadata <- metadata %>% filter(UID %in% existingUIDs)
+
+countData <- countData %>% dplyr::select(GeneSymbol, one_of(metadata$UID))
+
+countData2 <- countData %>% 
+  melt(id.vars="GeneSymbol", variable.name = "UID") %>%
+  left_join(metadata %>% dplyr::select(UID, Diffname_short), by="UID") %>%
+  group_by(GeneSymbol, Diffname_short) %>%
+  summarize(expression=median(value))
+
+countData3 <- countData2 %>% 
+  dcast(GeneSymbol ~ Diffname_short) %>%
+  dplyr::select(one_of(c("GeneSymbol", "SC", "DE", "MESO-5", 
+                         "ECTO", "EB", "MESO-15", "MESO-30")))
+
+rownames(countData3) <- countData3$GeneSymbol
+
+countMat <- countData3[downreg.mrna$feature, -1]
+countMat <- scale(countMat)
+countMat <- t(scale(t(countMat)))
+
+k <- 10
+countMat.kmeans <- kmeans(countMat, centers=k)
+
+dfAnnotations <- data.frame(feature=rownames(countMat)) %>% 
+  mutate(cluster=factor(countMat.kmeans$cluster)) %>%
+  arrange(cluster, feature)
+
+rownames(dfAnnotations) <- dfAnnotations$feature
+
+countMat <- countMat[as.character(dfAnnotations$feature), ]
+
+clusterColors <- brewer.pal(k, "Set3")
+names(clusterColors) <- c(1:k)
+
+geneAnnotation <- HeatmapAnnotation(df=dfAnnotations %>% dplyr::select(cluster), which="row",
+                                     col=list(cluster=clusterColors))
+
+ht <- Heatmap(countMat, name = "log10(Expression)", 
+              # col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
+              show_row_names = FALSE, 
+              show_column_names = TRUE,
+              # row_names_gp = gpar(fontsize = 8),
+              # column_names_gp = gpar(fontsize = 8),
+              cluster_rows = FALSE,
+              cluster_columns = FALSE,
+              clustering_method_rows = "average",
+              clustering_method_columns = "average",
+              show_row_hclust = FALSE, 
+              show_column_hclust = FALSE)
+
+print(ht + geneAnnotation)
+```
+
+The results were manually inspected to identify enrichment groups specific to cluster 1, which appears to be activated in the stem cell state and is repressed over time.
+I chose one particular enriched group (`Coexpression`::`M4282`::`The 'stemnes' signature: genes up-regulated and common to 6 human embryonic stem cell lines tested`), and pulled the genes related to this:
+```{r echo=TRUE}
+interestingGenes <- c("DDX21", "ELOVL6", "GDF3", "GJA1", "HMGA1", "HMGB2",
+                      "MTHFD1", "MTHFD2", "NANOG", "PODXL", "POU5F1", "PPAT",
+                      "PSIP1", "RCC2", "SEMA6A", "SEPHS1", "SET", "SLC16A1", "SNRPF")
+
+
+interestingStates <- orderedDiffState # c("ECTO", "EB") # 
+stateColors <- brewer.pal(length(interestingStates), 
+                          name = 'Set1') # c("blue", "orange")
+names(stateColors) <- interestingStates
+interestingGenes
+```
+
+```{r plotgraph, fig.width=30, fig.height=30}
+gd.mirna <- downreg.mrna.mirna %>%
+  filter(hgnc_symbol %in% interestingGenes, 
+         variable %in% interestingStates) %>% 
+  dplyr::select(feature, hgnc_symbol, variable) %>% 
+  unique
+
+gd.methylation <- downreg.mrna.methylation %>%
+  filter(hgnc_symbol %in% interestingGenes, 
+         variable %in% interestingStates) %>% 
+  dplyr::select(feature, hgnc_symbol, variable) %>% 
+  unique
+
+gd <- rbind(gd.mirna, gd.methylation)
+g <- graph_from_data_frame(gd, directed=TRUE)
+
+V(g)$type <- 1
+V(g)$type[V(g)$name %in% gd.mirna[, 1]] <- 2
+V(g)$type[V(g)$name %in% gd.methylation[, 1]] <- 3
+E(g)$type <- as.character(gd$variable)
+
+# toosmall <- which(graph.coreness(g) == 1 & V(g)$type == 2)
+# g <- delete.vertices(g, toosmall)
+# 
+# toosparse <- which(degree(g, mode="in") == 1)
+# g <- delete.vertices(g, toosparse)
+
+plot(g, #layout = layout_as_bipartite,
+     vertex.size=5,# vertex.label=NA,
+     # edge.arrow.mode=1,
+     edge.arrow.width=1,
+     edge.arrow.size=0.25,
+     vertex.color=c("red", "green", "blue")[V(g)$type],
+     edge.color=stateColors[E(g)$type])
+
+```
+
+```{r}
+txId <- 'GO:0003700'
+
+human_tfs <- getBM(attributes= "hgnc_symbol",
+                   filters=c("go_id","hgnc_symbol"),
+                   values=list(go=c(txId), hgnc_symbol=d2.mrna$feature), mart=Hs)
+```
+
