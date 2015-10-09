@@ -1,7 +1,10 @@
 ```{r knit2synapse, include=FALSE, eval=FALSE}
 # library(synapseClient)
+# synapseLogin()
+# outFolder <- synStore(Folder(name="Integrated DE Analysis (all diff state comparisons)",
+#                              parentId="syn4640410"))
 # knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/integrate.Rmd", 
-#                                owner="syn4913739", overwrite=TRUE)
+#                                owner=outFolder@properties$id, overwrite=TRUE)
 ```
 
 ```{r setup, include=FALSE}
@@ -21,11 +24,14 @@ library(RColorBrewer)
 
 set.seed(4)
 
+outFolder <- synStore(Folder(name="Integrated DE Analysis (all diff state comparisons)",
+                             parentId="syn4640410"))
+
 thisRepo <- getRepo('kdaily/pcbc_c4_analysis', 
                     ref='branch', refName='comparisonlist')
 thisScript <- getPermlink(thisRepo, 'code/Rmd/DiffStatePaper/integrate.Rmd')
 
-knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
 
 synapseLogin()
 
@@ -34,15 +40,6 @@ compNames <- synTableQuery("SELECT * FROM syn4483642")@values
 
 # Diff states in a sensible, quasi time-based ordering
 orderedDiffState <- c("SC", "DE", "MESO-5", "ECTO", "EB", "MESO-15", "MESO-30")
-
-thresh.p.mrna <- 0.0001
-thresh.lfc.mrna <- 2
-
-thresh.p.mirna <- 0.0001
-thresh.lfc.mirna <- 2
-
-thresh.p.methylation <- 0.001
-thresh.lfc.methylation <- 0.3
 
 usedIds <- c()
 
@@ -53,6 +50,22 @@ Hs <- biomaRt::useDataset("hsapiens_gene_ensembl", Hs)
 
 ```
 
+Set p-value and log fold change thresholds:
+
+```{r setthresholds, include=TRUE, echo=TRUE}
+thresh.p.mrna <- 0.0001
+thresh.lfc.mrna <- 3
+
+thresh.p.mirna <- 0.0001
+thresh.lfc.mirna <- 2
+
+thresh.p.methylation <- 0.5
+thresh.lfc.methylation <- 0.4
+
+```
+
+## mRNA
+
 ```{r mrna}
 obj <- synGet("syn4484232")
 usedIds <- c(usedIds, obj@properties$id)
@@ -60,9 +73,11 @@ usedIds <- c(usedIds, obj@properties$id)
 d.mrna <- fread(getFileLocation(obj), data.table=FALSE, 
                 showProgress = FALSE) %>% 
     mutate(assay='mRNA')
+```
 
-# Filter out the comparisons we're interested in
-# And significance levels as well
+Filter out the comparisons we're interested in at the specified significance levels.
+
+```{r filtermrna}
 d2.mrna <- d.mrna %>%
   rename(feature=GeneSymbol, comparison=Comparison) %>%
   filter(abs(logFC) > thresh.lfc.mrna,
@@ -82,6 +97,23 @@ d3.mrna <- d2.mrna %>%
 
 ```
 
+```{r mrna_filter2, echo=TRUE}
+tmp.mrna <- d2.mrna %>% 
+  dplyr::select(feature, comparison, variable1, variable2, direction) %>%
+  rename(hgnc_symbol=feature) %>%
+  rename(mrna_direction=direction)
+```
+
+```{r mrnatbl, echo=TRUE}
+d2.mrna %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(feature)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+## miRNA
+
 ```{r mirna}
 obj <- synGet("syn4609631")
 usedIds <- c(usedIds, obj@properties$id)
@@ -89,9 +121,11 @@ usedIds <- c(usedIds, obj@properties$id)
 d.mirna <- fread(getFileLocation(obj), data.table=FALSE, 
                  showProgress = FALSE) %>%
   mutate(assay='miRNA')
+```
 
-# Filter out the comparisons we're interested in
-# And significance levels as well
+Filter out the comparisons we're interested in at the specified significance levels as well.
+
+```{r filtermirna}
 d2.mirna <- d.mirna %>%
   rename(feature=GeneSymbol, comparison=Comparison) %>%
   filter(abs(logFC) > thresh.lfc.mirna,
@@ -103,7 +137,22 @@ d2.mirna <- d.mirna %>%
          comparison=str_replace(comparison, "__down", "")) %>%
   left_join(compNames) %>%
   filter(class == "Diffname_short")
+```
 
+Table of counts of filtered differentially expressed miRNAs:
+
+```{r mirnatbl, echo=TRUE}
+d2.mirna %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(feature)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+Now, use the mRNA-miRNA mapping file to add gene targets.
+We only keep miRNA mapping rows where the miRNA is in our differentially expressed set.
+
+```{r mapmirna}
 # Get miRNA mapping files
 DMAP.ID = 'syn3461627'
 usedIds <- c(usedIds, DMAP.ID)
@@ -139,48 +188,78 @@ d5.mirna <- d4.mirna %>%
 
 ```
 
-```{r mrna_mirna_filter}
-# Filter miRNAs that have opposite differential expression
-# than mRNA target and the mRNA is downregulated
+Table of counts of filtered differentially expressed miRNA-targeted genes:
 
-# First, get common columns from mRNA and miRNA data
-# Use dummy target for mRNA since it doesn't really have one
-tmp.mrna <- d2.mrna %>% 
-  dplyr::select(feature, comparison, variable1, variable2, direction) %>%
-  rename(hgnc_symbol=feature) %>%
-  rename(mrna_direction=direction)
+```{r mirnatbl2, echo=TRUE}
+d3.mirna %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(hgnc_symbol)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
 
-# Using the miRNA-mRNA mapped data, get the same columns
-# This time, the target is the mRNA
+Now, filter miRNAs that have opposite differential expression than mRNA target and the mRNA is downregulated (miRNA up, mRNA down):
+
+Using the miRNA-mRNA mapped data, get the same columns. 
+This time, the target is the mRNA.
+
+```{r mrna_mirna_filter2, echo=TRUE}
 tmp.mirna <- d3.mirna %>% 
   dplyr::select(hgnc_symbol, feature, comparison, variable1, variable2, direction) %>%
   rename(mirna_direction=direction) %>% 
   unique
+```
 
-# Combine the mrna and mirna data by gene and comparison
-tmp <- tmp.mirna %>% 
+Combine the mrna and mirna data by gene and comparison (exact same variable comparison).
+Then, filter for down-regulated (if the diff state we're interested in is listed second, then it's up-regulated)
+
+```{r mrna_mirna_filter3, echo=TRUE}
+tmp2.mirna <- tmp.mirna %>% 
   left_join(tmp.mrna) %>%
   filter(!is.na(mrna_direction), !is.na(mirna_direction))
 
-# Filter for down-regulated (if the diff state we're interested in is listed
-# second, then it's up-regulated)
-foo <- llply(orderedDiffState, 
-             function(x) filter(tmp, (variable1 == x & mrna_direction == "down" & mirna_direction == "up") | (variable2 == x & mrna_direction == "up" & mirna_direction == "down")))
+foo.miRNA <- llply(orderedDiffState, 
+                   function(x) filter(tmp2.mirna,
+                                      (variable1 == x & mrna_direction == "down" & mirna_direction == "up") | (variable2 == x & mrna_direction == "up" & mirna_direction == "down")))
 
-names(foo) <- orderedDiffState
-downreg.mrna.mirna <- ldply(foo, I, .id="variable") %>% unique
-
+names(foo.miRNA) <- orderedDiffState
+downreg.mrna.mirna <- ldply(foo.miRNA, I, .id="variable") %>% unique
 ```
 
+### Downregulated miRNA target genes
 
-```{r methylation}
+Table of counts of differentially expressed miRNAs downregulating their targeted genes:
+
+```{r downregmirnatbl, echo=TRUE}
+downreg.mrna.mirna %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(feature)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+Table of counts of the downregulated gene targets of differentially expressed miRNAs:
+
+```{r downregmirnatbl2, echo=TRUE}
+downreg.mrna.mirna %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(hgnc_symbol)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+## Methylation
+
+```{r getmethylation, echo=TRUE}
 obj <- synGet("syn4527629")
-d <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
+d.methylation <- fread(getFileLocation(obj), data.table=FALSE, showProgress = FALSE)
 usedIds <- c(usedIds, obj@properties$id)
+```
 
-# Filter out the comparisons we're interested in
-# And significance levels as well
-d2.methylation <- d %>% 
+Filter out the comparisons we're interested in at the specified significance levels as well.
+
+```{r filtermethylation, echo=TRUE}
+d2.methylation <- d.methylation %>% 
   mutate(assay='methylation') %>% 
   rename(feature=methProbeIDs, comparison=Comparison) %>%
   filter(abs(logFC) > thresh.lfc.methylation,
@@ -205,39 +284,85 @@ d4.methylation <- d3.methylation %>%
   unique
 ```
 
-```{r mrna_methyl_filter}
-# Filter methylation probes that have opposite differential expression
-# than mRNA target
+Table of counts of filtered differentially expressed methylation probes:
 
-# First, get common columns from mRNA and methylation data
-# Use dummy target for mRNA since it doesn't really have one
-tmp.mrna <- d2.mrna %>% 
-  dplyr::select(feature, comparison, variable1, variable2, direction) %>%
-  rename(hgnc_symbol=feature) %>%
-  rename(mrna_direction=direction)
+```{r methyltbl, echo=TRUE}
+d2.methylation %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(feature)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
 
-# Using the methyl-mRNA mapped data, get the same columns
-# This time, the target is the mRNA
+Table of counts of filtered differentially expressed methylation-targeted genes:
+
+```{r methyltbl2, echo=TRUE}
+d2.methylation %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(nearestTx)) %>%
+  dcast(variable1 ~ variable2, value.var="n", 
+        fun.aggregate=sum, margins=TRUE) %>%
+  kable
+```
+
+Filter methylation probes that have opposite differential expression than mRNA target.
+
+Using the methyl-mRNA mapped data, get the same columns. 
+This time, the target is the mRNA.
+
+```{r mrna_methyl_filter2, echo=TRUE}
 tmp.methylation <- d2.methylation %>% 
   dplyr::select(nearestTx, feature, comparison, variable1, variable2, direction) %>%
   rename(hgnc_symbol=nearestTx, methylation_direction=direction) %>% 
   unique
+```
 
+Combine the mrna and mirna data by gene and comparison.
+
+```{r mrna_methyl_filter3, echo=TRUE}
 tmp.mrna.methylation <- tmp.methylation %>% 
   left_join(tmp.mrna) %>%
   filter(!is.na(mrna_direction), !is.na(methylation_direction))
-
-foo <- llply(orderedDiffState, 
-             function(x) filter(tmp.mrna.methylation, (variable1 == x & mrna_direction == "down" & methylation_direction == "up") | (variable2 == x & mrna_direction == "up" & methylation_direction == "down")))
-
-names(foo) <- orderedDiffState
-downreg.mrna.methylation <- ldply(foo, I, .id="variable") %>%
-  unique
-
 ```
 
-```{r}
-# Filter based on methyl + mRNA or miRNA + mRNA differential expression
+### Down-regulated methylation target genes
+
+Then, filter for down-regulated (if the diff state we're interested in is listed second, then it's up-regulated)
+
+```{r mrna_methyl_filter4, echo=TRUE}
+
+foo.methyl <- llply(orderedDiffState, 
+             function(x) filter(tmp.mrna.methylation, (variable1 == x & mrna_direction == "down" & methylation_direction == "up") | (variable2 == x & mrna_direction == "up" & methylation_direction == "down")))
+
+names(foo.methyl) <- orderedDiffState
+downreg.mrna.methylation <- ldply(foo.methyl, I, .id="variable") %>%
+  unique
+```
+
+Table of counts of differentially expressed miRNAs downregulating their targeted genes:
+
+```{r downregmmethyltbl, echo=TRUE}
+downreg.mrna.methylation %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(feature)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+Table of counts of the downregulated gene targets of differentially expressed miRNAs:
+
+```{r downregmethyltbl2, echo=TRUE}
+downreg.mrna.methylation %>% 
+  group_by(variable1, variable2) %>% 
+  summarize(n=n_distinct(hgnc_symbol)) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
+  kable
+```
+
+
+Filter based on methyl + mRNA or miRNA + mRNA differential expression.
+
+```{r combinedfilter, echo=TRUE}
 final <- rbind(d3.mrna, d5.mirna, d4.methylation) %>%
   dcast(feature ~ assay, value.var='feature', fun.aggregate=length) %>%
   filter((methylation > 0 & mRNA > 0) | (miRNA > 0 & mRNA > 0))
@@ -248,24 +373,37 @@ downreg.mrna <- d3.mrna %>%
 
 ```
 
-```{r}
+```{r writefinalcsv, eval=TRUE}
 write.csv(final, file="integratedDEFeatures.csv")
+write.csv(downreg.mrna.methylation, "downreg.mrna.methylation.csv")
+write.csv(downreg.mrna.mirna, "downreg.mrna.mirna.csv")
 ```
 
-```{r synstore}
-f <- synStore(File("integratedDEFeatures.csv", parentId='syn4640410'),
+```{r synstorefinalcsv, eval=TRUE}
+f <- synStore(File("integratedDEFeatures.csv", parentId=outFolder@properties$id),
               used=usedIds,
               executed=thisScript)
+
+f2 <- synStore(File("downreg.mrna.mirna.csv",
+                    parentId=outFolder@properties$id),
+               used=usedIds,
+               executed=thisScript)
+
+f3 <- synStore(File("downreg.mrna.methylation.csv",
+                    parentId=outFolder@properties$id),
+               used=usedIds,
+               executed=thisScript)
+
+# See results in `r f@properties$id`.
 ```
 
-See results in `r f@properties$id`.
 
 ### Genes downregulated by miRNAs or methylation
 
 Data was clustered with k-means using n = 10 cluster centers.
 The data was submitted to ToppCluster for enrichment analysis.
 
-```{r plotheatmap, fig.width=20, fig.height=15}
+```{r plotheatmap, fig.width=20, fig.height=15, echo=FALSE}
 keepGenes <- downreg.mrna$feature
 
 metadata <- synTableQuery("select * from syn3156503")@values %>%
@@ -339,6 +477,8 @@ ht <- Heatmap(countMat, name = "log10(Expression)",
 print(ht + geneAnnotation)
 ```
 
+## Motivating Example
+
 The results were manually inspected to identify enrichment groups specific to cluster 1, which appears to be activated in the stem cell state and is repressed over time.
 I chose one particular enriched group (`Coexpression`::`M4282`::`The 'stemnes' signature: genes up-regulated and common to 6 human embryonic stem cell lines tested`), and pulled the genes related to this:
 ```{r echo=TRUE}
@@ -354,7 +494,7 @@ names(stateColors) <- interestingStates
 interestingGenes
 ```
 
-```{r plotgraph, fig.width=30, fig.height=30}
+```{r plotgraph, fig.width=30, fig.height=30, echo=FALSE}
 gd.mirna <- downreg.mrna.mirna %>%
   filter(hgnc_symbol %in% interestingGenes, 
          variable %in% interestingStates) %>% 
@@ -390,12 +530,3 @@ plot(g, #layout = layout_as_bipartite,
      edge.color=stateColors[E(g)$type])
 
 ```
-
-```{r}
-txId <- 'GO:0003700'
-
-human_tfs <- getBM(attributes= "hgnc_symbol",
-                   filters=c("go_id","hgnc_symbol"),
-                   values=list(go=c(txId), hgnc_symbol=d2.mrna$feature), mart=Hs)
-```
-
