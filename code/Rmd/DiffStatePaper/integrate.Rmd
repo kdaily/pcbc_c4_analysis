@@ -206,7 +206,7 @@ This time, the target is the mRNA.
 ```{r mrna_mirna_filter2, echo=TRUE}
 tmp.mirna <- d3.mirna %>% 
   dplyr::select(hgnc_symbol, feature, comparison, variable1, variable2, direction) %>%
-  rename(mirna_direction=direction) %>% 
+  rename(assay_direction=direction) %>% 
   unique
 ```
 
@@ -216,14 +216,17 @@ Then, filter for down-regulated (if the diff state we're interested in is listed
 ```{r mrna_mirna_filter3, echo=TRUE}
 tmp2.mirna <- tmp.mirna %>% 
   left_join(tmp.mrna) %>%
-  filter(!is.na(mrna_direction), !is.na(mirna_direction))
+  filter(!is.na(mrna_direction), !is.na(assay_direction))
 
 foo.miRNA <- llply(orderedDiffState, 
                    function(x) filter(tmp2.mirna,
-                                      (variable1 == x & mrna_direction == "down" & mirna_direction == "up") | (variable2 == x & mrna_direction == "up" & mirna_direction == "down")))
+                                      (variable1 == x & mrna_direction == "down" & assay_direction == "up") | (variable2 == x & mrna_direction == "up" & assay_direction == "down")))
 
 names(foo.miRNA) <- orderedDiffState
-downreg.mrna.mirna <- ldply(foo.miRNA, I, .id="variable") %>% unique
+downreg.mrna.mirna <- ldply(foo.miRNA, I, .id="variable") %>% 
+  unique %>% 
+  mutate(assay="miRNA")
+
 ```
 
 ### Downregulated miRNA target genes
@@ -312,7 +315,7 @@ This time, the target is the mRNA.
 ```{r mrna_methyl_filter2, echo=TRUE}
 tmp.methylation <- d2.methylation %>% 
   dplyr::select(nearestTx, feature, comparison, variable1, variable2, direction) %>%
-  rename(hgnc_symbol=nearestTx, methylation_direction=direction) %>% 
+  rename(hgnc_symbol=nearestTx, assay_direction=direction) %>% 
   unique
 ```
 
@@ -321,7 +324,7 @@ Combine the mrna and mirna data by gene and comparison.
 ```{r mrna_methyl_filter3, echo=TRUE}
 tmp.mrna.methylation <- tmp.methylation %>% 
   left_join(tmp.mrna) %>%
-  filter(!is.na(mrna_direction), !is.na(methylation_direction))
+  filter(!is.na(mrna_direction), !is.na(assay_direction))
 ```
 
 ### Down-regulated methylation target genes
@@ -331,11 +334,13 @@ Then, filter for down-regulated (if the diff state we're interested in is listed
 ```{r mrna_methyl_filter4, echo=TRUE}
 
 foo.methyl <- llply(orderedDiffState, 
-             function(x) filter(tmp.mrna.methylation, (variable1 == x & mrna_direction == "down" & methylation_direction == "up") | (variable2 == x & mrna_direction == "up" & methylation_direction == "down")))
+             function(x) filter(tmp.mrna.methylation, (variable1 == x & mrna_direction == "down" & assay_direction == "up") | (variable2 == x & mrna_direction == "up" & assay_direction == "down")))
 
 names(foo.methyl) <- orderedDiffState
 downreg.mrna.methylation <- ldply(foo.methyl, I, .id="variable") %>%
-  unique
+  unique %>% 
+  mutate(assay="methylation")
+
 ```
 
 Table of counts of differentially expressed miRNAs downregulating their targeted genes:
@@ -370,6 +375,20 @@ downreg.mrna <- d3.mrna %>%
   filter(feature %in% c(downreg.mrna.mirna$hgnc_symbol, 
                         downreg.mrna.methylation$hgnc_symbol))
 
+```
+
+```{r merge}
+downreg <- rbind(downreg.mrna.mirna, downreg.mrna.methylation)
+```
+
+List of features passing down-regulated filters for each assay:
+
+```{r mergetbl, echo=TRUE}
+downreg %>% 
+  dcast(variable2 + variable1 ~ assay, 
+        value.var="feature", 
+        fun.aggregate=function(x) length(unique(x))) %>% 
+  kable
 ```
 
 ```{r writefinalcsv, eval=TRUE}
