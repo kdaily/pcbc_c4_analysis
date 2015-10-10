@@ -300,8 +300,7 @@ Table of counts of filtered differentially expressed methylation-targeted genes:
 d2.methylation %>% 
   group_by(variable1, variable2) %>% 
   summarize(n=n_distinct(nearestTx)) %>%
-  dcast(variable1 ~ variable2, value.var="n", 
-        fun.aggregate=sum, margins=TRUE) %>%
+  dcast(variable1 ~ variable2, value.var="n") %>%
   kable
 ```
 
@@ -479,7 +478,7 @@ print(ht + geneAnnotation)
 
 ## Motivating Example
 
-The results were manually inspected to identify enrichment groups specific to cluster 1, which appears to be activated in the stem cell state and is repressed over time.
+The results were manually inspected to identify enrichment groups specific to cluster 2, which appears to be activated in the stem cell state and is repressed over time.
 I chose one particular enriched group (`Coexpression`::`M4282`::`The 'stemnes' signature: genes up-regulated and common to 6 human embryonic stem cell lines tested`), and pulled the genes related to this:
 ```{r echo=TRUE}
 interestingGenes <- c("DDX21", "ELOVL6", "GDF3", "GJA1", "HMGA1", "HMGB2",
