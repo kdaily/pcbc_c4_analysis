@@ -39,9 +39,9 @@ pp1 <- pp1[, c("UID", "target_id", "est_counts",
                "fpkm", "eff_counts", "tpm")]
 
 write.csv(pp1, "eXpress_merged.csv", row.names=FALSE)
-mergedFile <- File("eXpress_merged.csv", parentId="syn3354743",
-                   annotations=list(fileType="csv", dataType="mRNA", 
-                                    expressionLevel="transcript"))
+mergedFile <- File("eXpress_merged.csv", parentId="syn3354743")
+synSetAnnotations(mergedFile) <- list(fileType="csv", dataType="mRNA", 
+                                      expressionLevel="transcript")
 mergedFile <- synStore(mergedFile, used="syn3270268", executed=thisScript)
 
 ## Cast into wide data frames, one per measurement
