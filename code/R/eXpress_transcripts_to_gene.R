@@ -8,11 +8,11 @@ synapseLogin()
 
 collapse_eXpress <- function(dataID, mappingData) {
   expressFile <- synGet(dataID)
-  expressData <- tbl_df(fread(getFileLocation(expressFile), data.table=FALSE))
+  expressData <- fread(getFileLocation(expressFile), data.table=FALSE)
   
   expressData %>% 
     left_join(mappingData) %>%
-    select(-1) %>%
+    dplyr::select(-1) %>%
     group_by(hg19.kgXref.geneSymbol) %>%
     summarise_each(funs(sum))
 }
