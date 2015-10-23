@@ -24,6 +24,7 @@ names(objs) <- lapply(objs, function(x) annotations(x)$UID)
 
 # Get the file names
 listnames <- llply(objs, getFileLocation, .progress='text')
+names(listnames) <- lapply(objs, function(x) annotations(x)$UID)
 
 # Read all the files in, only specific columns
 # Merge them into a long data frame
@@ -49,22 +50,22 @@ estCounts <- dcast(pp1, target_id ~ UID, value.var="est_counts")
 write.csv(estCounts, "eXpress_est_counts.csv", row.names=FALSE)
 estCountsFile <- File("eXpress_est_counts.csv", parentId="syn3354743",
                       annotations=list(fileType="genomicMatrix", dataType="mRNA", expressionLevel="transcript"))
-estCountsFile <- synStore(estCountsFile, used=mergedFile@properties$id)
+estCountsFile <- synStore(estCountsFile, used=mergedFile@properties$id, executed=thisScript)
 
 effCounts <- dcast(pp1, target_id ~ UID, value.var="eff_counts")
 write.csv(effCounts, "eXpress_eff_counts.csv", row.names=FALSE)
 effCountsFile <- File("eXpress_eff_counts.csv", parentId="syn3354743",
                       annotations=list(fileType="genomicMatrix", dataType="mRNA", expressionLevel="transcript"))
-effCountsFile <- synStore(effCountsFile, used=mergedFile@properties$id)
+effCountsFile <- synStore(effCountsFile, used=mergedFile@properties$id, executed=thisScript)
 
 tpm <- dcast(pp1, target_id ~ UID, value.var="tpm")
 write.csv(tpm, "eXpress_tpm.csv", row.names=FALSE)
 tpmFile <- File("eXpress_tpm.csv", parentId="syn3354743",
                 annotations=list(fileType="genomicMatrix", dataType="mRNA", expressionLevel="transcript"))
-tpmFile <- synStore(tpmFile, used=mergedFile@properties$id)
+tpmFile <- synStore(tpmFile, used=mergedFile@properties$id, executed=thisScript)
 
 fpkm <- dcast(pp1, target_id ~ UID, value.var="fpkm")
 write.csv(fpkm, "eXpress_fpkm.csv", row.names=FALSE)
 fpkmFile <- File("eXpress_fpkm.csv", parentId="syn3354743",
                  annotations=list(fileType="genomicMatrix", dataType="mRNA", expressionLevel="transcript"))
-fpkmFile <- synStore(fpkmFile, used=mergedFile@properties$id)
+fpkmFile <- synStore(fpkmFile, used=mergedFile@properties$id, executed=thisScript)
