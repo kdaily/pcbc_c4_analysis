@@ -32,9 +32,9 @@ annots <- list(dataType="mRNA", fileType="genomicMatrix", expressionLevel="gene"
 effCountID <- "syn5006129"
 effCountData <- collapse_eXpress(effCountID, mappingData)
 write.csv(effCountData, "eXpress_eff_count_geneSymbol.csv", row.names=FALSE)
-f <- File("eXpress_eff_count_geneSymbol.csv", parentId="syn3354743")
+f <- File("eXpress_eff_count_geneSymbol.csv", parentId="syn5008578")
 synSetAnnotations(f) <- annots
 generatedBy(f) <- Activity(used=c(effCountID, mappingFile), 
-                                    executed=thisFile,
-                                    name="Sum", description="Sum over gene symbol")
+                           executed=thisFile,
+                           name="Sum", description="Sum over gene symbol")
 f <- synStore(f)
