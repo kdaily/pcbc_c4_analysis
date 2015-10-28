@@ -139,20 +139,19 @@ Determine design matrix for normalisation and differential expression analysis.
 
 Remove genes that have less than 1 cpm counts in at least 50% of each of the individual differentiation stages.
 ```{r cpmnormalisation}
-tmp <- tapply(colnames(COUNT),
-              factor(METADATA$Diffname_short),
-              function(cols,COUNT){
-                PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(COUNT[,cols])},
-              COUNT)
-
-ugenes <- unique(as.character(unlist(lapply(tmp, 
-                                            function(x) x$filteredExprMatrix$genes[, 1]))))
-
-COUNT <- COUNT[ugenes,,drop=F]
-
 # Does not do any filtering, only puts data into the format required
-PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(COUNT,MIN_GENE_CPM=0,
-                                                 MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM=0)
+
+getProcessedCounts <- function(cols,counts){
+  PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(counts[,cols], 
+                                                   MIN_GENE_CPM=1,
+                                                   MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM=0.5)
+}
+
+PROCESSED_COUNTS <- tapply(colnames(COUNT),
+                           factor(METADATA$Diffname_short),
+                           getProcessedCounts,
+                           COUNT)
+
 ```
 `r dim(COUNT)[1]` genes and `r dim(COUNT)[2]` samples are considered for the analysis.
 ```{r data.split}
