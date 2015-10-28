@@ -256,21 +256,25 @@ PCA.GENE.EXPRESSION = lapply(COVARIATES, plotPCAGeneExpression, VOOM.GENE.EXPRES
 ### Significant Covariates
 Correlation between pca of unadjusted mRNA expression and covariates is used to find significant covariates
 ```{r preAdjusted.covariates, fig.width=25, fig.height=12, cache=FALSE}
-plotGeneCovariatesCorrelation <- function(COVARIATES, VOOM.GENE.EXPRESSION.PREADJUSTED){
-  writeLines('------------------------------------------------------------------------------')
-  diffstate = unique(COVARIATES$Diffname_short)
-  writeLines(paste('Differentiation state:',as.character(diffstate)))
-  writeLines('------------------------------------------------------------------------------')
+plotGeneCovariatesCorrelation <- function(covariates, voomExpr){
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
   
   # Drop unilevel covariates
-  COVARIATES = droplevels(COVARIATES)
-  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
   
   # Find correlation between PC's of gene expression with covariates
-  DESIGN = getDesignMat2Fact(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM$design,FactorCovariates)
-  colnames(DESIGN) = substr(colnames(DESIGN),1,50)
-  preAdjustedSigCovars = runPCAandPlotCorrelations(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$GENE.EXPRESSION$E, 
-                                                   DESIGN,
+  dm = getDesignMat2Fact(voomExpr[[diffstate]]$DM$design,
+                             FactorCovariates)
+  
+  colnames(dm) = substr(colnames(dm),1,50)
+  
+  tmpExpr <- voomExpr[[diffstate]]$GENE.EXPRESSION$E
+  preAdjustedSigCovars = runPCAandPlotCorrelations(tmpExpr, dm,
                                                    'NULL design(voom-normalized)', 
                                                    isKeyPlot=TRUE)
   
@@ -278,19 +282,22 @@ plotGeneCovariatesCorrelation <- function(COVARIATES, VOOM.GENE.EXPRESSION.PREAD
   print(preAdjustedSigCovars[["PC_res"]][[2]]$plotData)  
   
   # Find significant covariates
-  adjustCovars = designMatVarsToCovars(getCovariatesMap(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM),
+  tmpDm <- voomExpr[[diffstate]]$DM
+  adjustCovars = designMatVarsToCovars(getCovariatesMap(tmpDm),
                                        preAdjustedSigCovars$significantCovars)
+
   
-  writeLines('------------------------------------------------------------------------------')
-  writeLines(paste('Significant covariates to adjust at FDR 0.1 are',paste(gsub('_','\\\\_',adjustCovars), collapse= ',')))
-  writeLines('------------------------------------------------------------------------------')
-  writeLines('')
+  cat("----\n",
+      paste('Significant covariates to adjust at FDR 0.1 are:\n',
+            paste(gsub('_','\\\\_',adjustCovars), collapse= ', ')),
+      sep="")
   writeLines('')
   
   return(list(adjustCovars = adjustCovars,
               preAdjustedSigCovars = preAdjustedSigCovars))  
 }
-PREADJUSTED.COVARIATES = lapply(COVARIATES, plotGeneCovariatesCorrelation, VOOM.GENE.EXPRESSION.PREADJUSTED)
+PREADJUSTED.COVARIATES = lapply(COVARIATES, plotGeneCovariatesCorrelation,
+                                VOOM.GENE.EXPRESSION.PREADJUSTED)
 ```
 
 ### Normalisation (iterative)
