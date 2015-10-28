@@ -216,18 +216,19 @@ VOOM.GENE.EXPRESSION.PREADJUSTED = lapply(COVARIATES, initialVoomNormalisation, 
 
 Clustering of initial normalised data (with NULL design)
 ```{r decompse.normalise.data, fig.height=8, fig.width=8}
-plotPCAGeneExpression <- function(COVARIATES, VOOM.GENE.EXPRESSION.PREADJUSTED){ 
-  writeLines('------------------------------------------------------------------------------')
-  diffstate = unique(COVARIATES$Diffname_short)
-  writeLines(paste('Differentiation state:',as.character(diffstate)))
-  writeLines('------------------------------------------------------------------------------')
+plotPCAGeneExpression <- function(covariates, voomExpression){ 
+  diffstate = unique(covariates$Diffname_short)
   
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
+
   # Drop unilevel covariates
-  COVARIATES = droplevels(COVARIATES)
-  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
   
   # Find principal components of expression to plot
-  PC <- prcomp(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$GENE.EXPRESSION$E)
+  PC <- prcomp(voomExpression[[diffstate]]$GENE.EXPRESSION$E)
   
   # Plot first 2 PCs
   plotdata <- data.frame(UID=rownames(PC$rotation), 
@@ -238,8 +239,12 @@ plotPCAGeneExpression <- function(COVARIATES, VOOM.GENE.EXPRESSION.PREADJUSTED){
   plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
 
   p <- ggplot(plotdata, aes(x=PC1, y=PC2))
-  p <- p + geom_point(aes(color=Cell_Line_Type, shape=Reprogramming_Vector_Type, size=Gender))
-  p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values=1:length(unique(COVARIATES$Reprogramming_Vector_Type))) + theme(legend.position="top") 
+  p <- p + geom_point(aes(color=Cell_Line_Type, 
+                          shape=Reprogramming_Vector_Type, 
+                          size=Gender))
+  p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) 
+  p <- p + scale_shape_manual(values=1:length(unique(covariates$Reprogramming_Vector_Type)))
+  p <- p + theme(legend.position="top") 
   p <- p + geom_text(aes(label= labels), size=4, hjust=0)
   print(p)
   
