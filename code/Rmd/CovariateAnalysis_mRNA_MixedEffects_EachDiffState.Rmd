@@ -38,10 +38,11 @@ devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-func
 
 synapseLogin()
 
+library(pcbcStats)
 # source utility files from ../R/lib folder
 # These should be moved to a package - very fragile way to do this!
-file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
-tmp = sapply(file.sources, source,.GlobalEnv)
+# file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
+# tmp = sapply(file.sources, source,.GlobalEnv)
 
 options(xtable.type="html")
 
