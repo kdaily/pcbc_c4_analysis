@@ -301,17 +301,19 @@ PREADJUSTED.COVARIATES = lapply(COVARIATES, plotGeneCovariatesCorrelation,
 ```
 
 ### Normalisation (iterative)
-Since many covariates are correlated, re-normalising COVARIATES with an iterative design matrix. All effects are considered as fixed effects, except Donor_ID which is a random effect
+Since many covariates are correlated, re-normalising COVARIATES with an iterative design matrix. All effects are considered as fixed effects, except Donor_ID which is a random effect.
 ```{r iterative.adjusted.voom.normalisation, fig.width=25, fig.height=12, cache=FALSE}
-iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRESSION.PREADJUSTED, PREADJUSTED.COVARIATES){  
-  writeLines('------------------------------------------------------------------------------')
-  diffstate = unique(COVARIATES$Diffname_short)  
-  writeLines(paste('Differentiation state:',as.character(diffstate)))
-  writeLines('------------------------------------------------------------------------------')
+iterativeNormalisation <- function(covariates, processedCounts, voomExpr,
+                                   preadjustedCovariates) {  
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
   
   # Drop unilevel covariates
-  COVARIATES = droplevels(COVARIATES)
-  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]    
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
   
   # Assign return values
   FIT = c()
@@ -320,18 +322,23 @@ iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRE
   postAdjustCovars = c()
   GENE.EXPRESSION = c()
   
-  # Assign residual covariates
-  residualSigCovars = PREADJUSTED.COVARIATES[[diffstate]]$preAdjustedSigCovars
+  # Covariate to levels mapping
+  covariateMapping <- getCovariatesMap(voomExpr[[diffstate]]$DM)
   
-  significantCovars = designMatVarsToCovars(getCovariatesMap(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM),
+  # Assign residual covariates
+  residualSigCovars = preadjustedCovariates[[diffstate]]$preAdjustedSigCovars
+  
+  significantCovars = designMatVarsToCovars(covariateMapping,
                                             residualSigCovars$significantCovars)
-  covariatesEffects = designMat2CovEffects(getCovariatesMap(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM),
+  
+  covariatesEffects = designMat2CovEffects(covariateMapping,
                                            residualSigCovars$Effects.significantCovars)
-  covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars,'Donor_ID'))]
+  
+  covariatesEffects = covariatesEffects[setdiff(significantCovars, c(postAdjustCovars,'Donor_ID'))]
     
   postAdjustCovars = names(which.max(covariatesEffects))
   
-  DESIGN = dplyr::select(as.data.frame(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM$design),-starts_with('Donor_ID'))
+  DESIGN = dplyr::select(as.data.frame(voomExpr[[diffstate]]$DM$design),-starts_with('Donor_ID'))
   colnames(DESIGN) = substr(colnames(DESIGN),1,50)
   
   loopCount = 0 
@@ -341,18 +348,18 @@ iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRE
                 sep=':'))
     
     # Post adjusted design matrix
-    DM1 = getDesignMatrix(COVARIATES[,postAdjustCovars,drop=F],Intercept = F)
+    DM1 = getDesignMatrix(covariates[,postAdjustCovars,drop=F],Intercept = F)
     DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
     
     # Estimate sample weights with null design
-    GENE.EXPRESSION = voom(PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix, 
+    GENE.EXPRESSION = voom(processedCounts[[diffstate]]$filteredExprMatrix, 
                            design = DM1$design, 
                            plot=F)
     
     # Estimate correlation between donor effects
     CORRELATION = duplicateCorrelation(GENE.EXPRESSION, 
                                        design = DM1$design,
-                                       block = COVARIATES$Donor_ID)
+                                       block = covariates$Donor_ID)
     
     if(abs(CORRELATION$cor) == 1 || abs(CORRELATION$cor) == 0){
       writeLines('Random effects correlation cannot be estimated')
@@ -360,15 +367,15 @@ iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRE
     }
     
     # Estimate sample weights with correlation efects
-    GENE.EXPRESSION = voom(PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix, 
+    GENE.EXPRESSION = voom(processedCounts[[diffstate]]$filteredExprMatrix, 
                            design = DM1$design,
-                           block = COVARIATES$Donor_ID,
+                           block = covariates$Donor_ID,
                            correlation = CORRELATION$consensus.cor,
                            plot=F)
     
     # Fit linear model with chosen design
     FIT = lmFit(GENE.EXPRESSION,
-                block = COVARIATES$Donor_ID,
+                block = covariates$Donor_ID,
                 correlation = CORRELATION$consensus.cor)
     
     # Residuals after normalisation
@@ -384,9 +391,9 @@ iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRE
                                                   isKeyPlot=TRUE)
     
     # Add postadjusted covariates (if any)
-    significantCovars = designMatVarsToCovars(getCovariatesMap(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM), 
+    significantCovars = designMatVarsToCovars(getCovariatesMap(voomExpr[[diffstate]]$DM), 
                                               residualSigCovars$significantCovars)
-    covariatesEffects = designMat2CovEffects(getCovariatesMap(VOOM.GENE.EXPRESSION.PREADJUSTED[[diffstate]]$DM),
+    covariatesEffects = designMat2CovEffects(getCovariatesMap(voomExpr[[diffstate]]$DM),
                                              residualSigCovars$Effects.significantCovars)
     covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars,'Donor_ID'))]
     
@@ -410,7 +417,9 @@ iterativeNormalisation <- function(COVARIATES, PROCESSED_COUNTS, VOOM.GENE.EXPRE
               residualSigCovars = residualSigCovars,
               postAdjustCovars = postAdjustCovars))
 }  
-VOOM.GENE.EXPRESSION.POSTADJUSTED = lapply(COVARIATES, iterativeNormalisation, PROCESSED_COUNTS, VOOM.GENE.EXPRESSION.PREADJUSTED, PREADJUSTED.COVARIATES)
+VOOM.GENE.EXPRESSION.POSTADJUSTED = lapply(COVARIATES, iterativeNormalisation, 
+                                           PROCESSED_COUNTS, VOOM.GENE.EXPRESSION.PREADJUSTED, 
+                                           PREADJUSTED.COVARIATES)
 ```
 
 ### Synapse Store
