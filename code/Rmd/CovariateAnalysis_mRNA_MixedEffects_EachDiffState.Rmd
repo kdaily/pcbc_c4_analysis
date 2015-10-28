@@ -162,6 +162,7 @@ COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
 COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
 COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
 
+# Split covariates by diffname short
 COVARIATES = split(COVARIATES,COVARIATES$Diffname_short)
 ```
 ### Covariate clustering
@@ -169,8 +170,9 @@ Covariate correlation
 ```{r covariates.correlation, fig.width=10, fig.height=10}
 covariateCorrelation <- function(covariates){  
   Diffname = unique(covariates$Diffname_short)
-  writeLines('------------------------------------------------------------------------------')
-  writeLines(paste('#### Differentiation state:',as.character(Diffname)))
+  cat("----\n", 
+      paste('#### Differentiation state:',as.character(Diffname)),
+      sep="")
 
   covariates = droplevels(covariates)
   covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
