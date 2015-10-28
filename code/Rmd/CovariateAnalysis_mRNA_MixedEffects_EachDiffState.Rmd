@@ -438,9 +438,8 @@ ActivityName <- 'Covariate Analysis of eXpress aligned mRNA data at each diff st
 thisFileName <- 'CovariateAnalysis_mRNA_MixedEffects_EachDiffState.Rmd'
   
 # Github link
-thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
-                    ref="branch", 
-                    refName='mRNA')
+thisRepo <- getRepo(repository = "kdaily/pcbc_c4_analysis", 
+                    ref="branch", refName='thanneer')
 
 thisFile <- getPermlink(repository = thisRepo,
                         repositoryPath=paste0('code/Rmd/', thisFileName))
@@ -451,8 +450,8 @@ CODE <- Folder(name = 'Covariate Analysis mRNA Mixed Effects EachDiffState',
 
 CODE <- synStore(CODE)
 
-storeFilesInSynapse <- function(covariates, PROCESSED_COUNTS, 
-                                VOOM.GENE.EXPRESSION.POSTADJUSTED, CODE) {
+storeFilesInSynapse <- function(covariates, processedCounts, 
+                                voomExpr, code) {
   diffstate = unique(covariates$Diffname_short)
     
   # Drop unilevel covariates
@@ -460,7 +459,7 @@ storeFilesInSynapse <- function(covariates, PROCESSED_COUNTS,
   covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
   
   # Store counts matrix
-  COUNTS <- PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix$counts
+  COUNTS <- processedCounts[[diffstate]]$filteredExprMatrix$counts
   COUNTS <- rownameToFirstColumn(COUNTS, 'GeneName')
   
   write.table(COUNTS,
@@ -469,7 +468,7 @@ storeFilesInSynapse <- function(covariates, PROCESSED_COUNTS,
   
   COUNTS_OBJ <- File(paste0('./Processed_CPM_Counts_',diffstate,'.tsv'),
                      name = paste('Processed logCPM Counts',diffstate),
-                     parentId = CODE$properties$id)
+                     parentId = code$properties$id)
   
   COUNTS_OBJ <- synStore(COUNTS_OBJ, 
                          used = ALL_USED_IDs, 
@@ -477,36 +476,36 @@ storeFilesInSynapse <- function(covariates, PROCESSED_COUNTS,
                          executed = thisFile) 
   
   # Adjustment Weights
-  WEIGHTS <- cbind(PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix$genes,
-                   VOOM.GENE.EXPRESSION.POSTADJUSTED[[diffstate]]$GENE.EXPRESSION$weights)
+  WEIGHTS <- cbind(processedCounts[[diffstate]]$filteredExprMatrix$genes,
+                   voomExpr[[diffstate]]$GENE.EXPRESSION$weights)
   colnames(WEIGHTS) <- c('GeneNames',
-                         rownames(PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix$samples))
+                         rownames(processedCounts[[diffstate]]$filteredExprMatrix$samples))
   write.table(WEIGHTS,
               file = paste0('./Adjusted_mRNA_Weights_',diffstate,'.tsv'),
               sep='\t', row.names=F, col.names=T, quote=F)
   
   WEIGHTS_OBJ <- File(paste0('Adjusted_mRNA_Weights_',diffstate,'.tsv'),
                       name = paste('Adjusted Weights',diffstate),
-                      parentId = CODE$properties$id)
+                      parentId = code$properties$id)
   
   WEIGHTS_OBJ <- synStore(WEIGHTS_OBJ, used = ALL_USED_IDs, activityName = ActivityName, 
                           executed = thisFile)
   
   # Covariates Matrix
-  COVARIATES <- rownameToFirstColumn(COVARIATES,'UID')
-  write.table(COVARIATES,
+  covariates <- rownameToFirstColumn(covariates, 'UID')
+  write.table(covariates,
               file = paste0('./Adjusted_mRNA_Covariates_',diffstate,'.tsv'),
               sep='\t', row.names=F, col.names=T, quote=F)
   
   COVARIATES_OBJ <- File(paste0('Adjusted_mRNA_Covariates_',diffstate,'.tsv'),
                          name = paste('Adjusted Covariates',diffstate),
-                         parentId = CODE$properties$id)
+                         parentId = code$properties$id)
 
   COVARIATES_OBJ <- synStore(COVARIATES_OBJ,  used = ALL_USED_IDs, 
                              activityName = ActivityName, executed = thisFile)
   
   # Design Matrix
-  DESIGN <- VOOM.GENE.EXPRESSION.POSTADJUSTED[[diffstate]]$GENE.EXPRESSION$design
+  DESIGN <- voomExpr[[diffstate]]$GENE.EXPRESSION$design
   DESIGN <- rownameToFirstColumn(DESIGN, 'UID')
 
   write.table(DESIGN,
@@ -515,7 +514,7 @@ storeFilesInSynapse <- function(covariates, PROCESSED_COUNTS,
   
   DESIGN_OBJ <- File(paste0('Adjusted_mRNA_Design_',diffstate,'.tsv'),
                      name = paste('Adjusted Design',diffstate),
-                     parentId = CODE$properties$id)
+                     parentId = code$properties$id)
   DESIGN_OBJ <- synStore(DESIGN_OBJ, used = ALL_USED_IDs, activityName = ActivityName, 
                          executed = thisFile)
 }
