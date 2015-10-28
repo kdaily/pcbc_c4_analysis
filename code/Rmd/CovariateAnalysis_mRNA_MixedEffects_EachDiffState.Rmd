@@ -189,24 +189,27 @@ COVARIATES.CORRELATION = lapply(COVARIATES, covariateCorrelation)
 ### Normalisation (with NULL)
 Initial normalisation usign voom (with NULL design)
 ```{r initial.voom.normalisation, cache=FALSE}
-initialVoomNormalisation <- function(COVARIATES, PROCESSED_COUNTS){
-  writeLines('------------------------------------------------------------------------------')
-  diffstate = unique(COVARIATES$Diffname_short)
-  writeLines(paste('Differentiation state:',as.character(diffstate)))
-  writeLines('------------------------------------------------------------------------------')
-  # Drop unilevel covariates
-  COVARIATES = droplevels(COVARIATES)
-  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+initialVoomNormalisation <- function(covariates, processed_counts){
+  
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("----",
+      paste('#### Differentiation state:',as.character(diffstate)),
+      sep="")
+
+    # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
   
   # Initial normalisation of gene expression
-  GENE.EXPRESSION = voom(PROCESSED_COUNTS[[diffstate]]$filteredExprMatrix, design=NULL, plot=T)
+  gene.expression = voom(processed_counts[[diffstate]]$filteredExprMatrix, design=NULL, plot=T)
     
   # Initial design matrix with covariates under consideration  
-  DM = getDesignMatrix(COVARIATES, Intercept = F)
+  dm = getDesignMatrix(covariates, Intercept = F)
   
-  return(list(GENE.EXPRESSION = GENE.EXPRESSION,
-              COVARIATES = COVARIATES,
-              DM = DM))
+  return(list(GENE.EXPRESSION = gene.expression,
+              COVARIATES = covariates,
+              DM = dm))
 }
 VOOM.GENE.EXPRESSION.PREADJUSTED = lapply(COVARIATES, initialVoomNormalisation, PROCESSED_COUNTS)
 ```
