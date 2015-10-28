@@ -168,20 +168,19 @@ COVARIATES = split(COVARIATES,COVARIATES$Diffname_short)
 ### Covariate clustering
 Covariate correlation
 ```{r covariates.correlation, fig.width=10, fig.height=10}
-covariateCorrelation <- function(COVARIATES){  
-  Diffname = unique(COVARIATES$Diffname_short)
+covariateCorrelation <- function(covariates){  
+  Diffname = unique(covariates$Diffname_short)
   writeLines('------------------------------------------------------------------------------')
-  writeLines(paste('Differentiation state:',as.character(Diffname)))
-  writeLines('------------------------------------------------------------------------------')
-  
-  COVARIATES = droplevels(COVARIATES)
-  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+  writeLines(paste('#### Differentiation state:',as.character(Diffname)))
+
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
   
   # Correlation between covariates
-  COVARIATES.CORRELATION = getAssociationStatistics(COVARIATES, PVAL = 0.1)  
-  ggheatmap.show(COVARIATES.CORRELATION$plot, col.width=0.3, row.width=0.15)
+  covariates.correlation = getAssociationStatistics(covariates, PVAL = 0.1)  
+  ggheatmap.show(covariates.correlation$plot, col.width=0.3, row.width=0.15)
   
-  return(list(COVARIATES.CORRELATION = COVARIATES.CORRELATION))
+  return(list(COVARIATES.CORRELATION = covariates.correlation))
 }
 
 COVARIATES.CORRELATION = lapply(COVARIATES, covariateCorrelation)
