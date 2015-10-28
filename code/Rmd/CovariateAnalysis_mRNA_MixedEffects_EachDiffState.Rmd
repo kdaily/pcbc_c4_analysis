@@ -27,6 +27,7 @@ library('data.table')
 library('dplyr')
 library('knitr')
 library('stringr')
+library(pcbcStats)
 
 ## Needs the dev branch
 library('rGithubClient')
@@ -38,7 +39,6 @@ devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-func
 
 synapseLogin()
 
-library(pcbcStats)
 # source utility files from ../R/lib folder
 # These should be moved to a package - very fragile way to do this!
 # file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
