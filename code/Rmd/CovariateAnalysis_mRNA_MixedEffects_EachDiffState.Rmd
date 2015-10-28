@@ -193,8 +193,8 @@ initialVoomNormalisation <- function(covariates, processed_counts){
   
   diffstate = unique(covariates$Diffname_short)
   
-  cat("----",
-      paste('#### Differentiation state:',as.character(diffstate)),
+  cat("----\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
       sep="")
 
     # Drop unilevel covariates
