@@ -65,16 +65,12 @@ diffstate = list(DE = 'DE', EB = 'EB', ECTO = 'ECTO', MESO5 = 'MESO5', SC = 'SC'
 FactorCovariates = c('Diffname_short', 'run', 'lane', 'Cell_Line_Type', 'Cell_Line_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Gene_Combination', 'Culture_Conditions', 'Donor_Life_Stage', 'Gender', 'Originating_Lab', 'Donor_ID', 'Cell_Type_of_Origin_Level2', 'Reprogramming_Vector_Type')
 ContCovariates = c('PassageAtThaw', 'PassageAtHarvest')
 ```
-Obtain processed counts, design, weights and covariates matrix from synapse
+Obtain processed counts, design, weights and covariates matrix from Synapse.
 ```{r getdata, cache=FALSE, include=FALSE}
 All.Files = synQuery(paste0('select * from file where parentId == "',COVARIATES_FOLDER,'"'))
 
 # Function to download expression counts, 
 getData <- function(diffstate, All.Files, FactorCovariates, ContCovariates){
-  writeLines('------------------------------------------------------------------------------')
-  writeLines(paste('Downloading differentiation state:',as.character(diffstate)))
-  writeLines('------------------------------------------------------------------------------')
-
   # Get count matrix
   PROC.COUNT_OBJ = synGet(All.Files$file.id[grep(paste('Processed logCPM Counts',diffstate), All.Files$file.name)])
   ALL_USED_IDs = PROC.COUNT_OBJ$properties$id
@@ -100,7 +96,6 @@ getData <- function(diffstate, All.Files, FactorCovariates, ContCovariates){
   COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
   COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
 
-  writeLines('------------------------------------------------------------------------------')
   return(list( PROC.COUNT = PROC.COUNT,
                COVARIATES = COVARIATES,              
                DESIGN = DESIGN,
@@ -111,6 +106,9 @@ getData <- function(diffstate, All.Files, FactorCovariates, ContCovariates){
 # Get data from synapse
 DATA = lapply(diffstate, getData, All.Files, FactorCovariates, ContCovariates)
 ```
+
+`r All.Files %>% select(file.name, file.id, file.fileType, file.fileSubType, file.Diffname_short)  %>% kable`
+
 ### Differential Expression Analysis At Each Differentiation Stage
 Obtain differentially expressed genes with the following covariates (as obtained from covariates analysis) in the model:
 * Differentation Stage: DE
