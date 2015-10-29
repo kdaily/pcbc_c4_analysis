@@ -57,7 +57,7 @@ knitr::opts_chunk$set(
 ### Download data
 ```{r setup, include=FALSE}
 # Input Parameter
-COVARIATES_FOLDER = 'syn4557064'
+COVARIATES_FOLDER = 'syn5015149'
 parentId = 'syn3256504'
 
 # Diffstate Names
