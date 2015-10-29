@@ -58,7 +58,7 @@ knitr::opts_chunk$set(
 ```{r setup, include=FALSE}
 # Input Parameter
 COVARIATES_FOLDER = 'syn5015149'
-parentId = 'syn3256504'
+parentId = 'syn5008933'
 
 # Diffstate Names
 diffstate = list(DE = 'DE', EB = 'EB', ECTO = 'ECTO', MESO5 = 'MESO5', SC = 'SC')
