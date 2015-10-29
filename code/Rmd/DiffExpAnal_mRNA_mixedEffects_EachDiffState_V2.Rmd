@@ -28,6 +28,7 @@ library('dplyr')
 library('knitr')
 library('stringr')
 library('knit2synapse')
+library(pcbcStats)
 
 ## Needs the dev branch
 library(rGithubClient)
@@ -42,11 +43,6 @@ devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-func
 #                    overwrite=F)
 
 synapseLogin()
-
-# source utility files from ../R/lib folder
-file.sources = list.files('../R/lib',pattern="*.R")
-file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
-tmp = sapply(file.sources,source,.GlobalEnv)
 
 options(xtable.type="html")
 
