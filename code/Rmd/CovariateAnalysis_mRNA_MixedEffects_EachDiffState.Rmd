@@ -451,8 +451,8 @@ CODE <- synStore(CODE)
 
 storeFilesInSynapse <- function(covariates, processedCounts, 
                                 voomExpr, code) {
-  diffstate = unique(covariates$Diffname_short)
-    
+  diffstate = as.character(unique(covariates$Diffname_short))
+  
   # Drop unilevel covariates
   covariates = droplevels(covariates)
   covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
