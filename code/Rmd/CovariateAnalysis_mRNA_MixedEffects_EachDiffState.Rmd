@@ -469,6 +469,9 @@ storeFilesInSynapse <- function(covariates, processedCounts,
                      name = paste('Processed logCPM Counts',diffstate),
                      parentId = code$properties$id)
   
+  synSetAnnotations(COUNTS_OBJ) <- list(dataType="mRNA", fileType="genomicMatrix", 
+                                        fileSubType="counts", Diffname_short=diffstate)
+  
   COUNTS_OBJ <- synStore(COUNTS_OBJ, 
                          used = ALL_USED_IDs, 
                          activityName = ActivityName, 
@@ -487,6 +490,10 @@ storeFilesInSynapse <- function(covariates, processedCounts,
                       name = paste('Adjusted Weights',diffstate),
                       parentId = code$properties$id)
   
+  synSetAnnotations(WEIGHTS_OBJ) <- list(dataType="mRNA", fileType="Weights", fileSubType="Adjusted",
+                                         fixedEffects=voomExpr[[diffstate]]$postAdjustCovars,
+                                         randomEffects="Donor_ID", Diffname_short=diffstate)
+  
   WEIGHTS_OBJ <- synStore(WEIGHTS_OBJ, used = ALL_USED_IDs, activityName = ActivityName, 
                           executed = thisFile)
   
@@ -500,6 +507,10 @@ storeFilesInSynapse <- function(covariates, processedCounts,
                          name = paste('Adjusted Covariates',diffstate),
                          parentId = code$properties$id)
 
+  synSetAnnotations(COVARIATES_OBJ) <- list(dataType="mRNA", fileType="Covariates", fileSubType="Adjusted",
+                                            fixedEffects=voomExpr[[diffstate]]$postAdjustCovars,
+                                            randomEffects="Donor_ID", Diffname_short=diffstate)
+  
   COVARIATES_OBJ <- synStore(COVARIATES_OBJ,  used = ALL_USED_IDs, 
                              activityName = ActivityName, executed = thisFile)
   
@@ -514,6 +525,11 @@ storeFilesInSynapse <- function(covariates, processedCounts,
   DESIGN_OBJ <- File(paste0('Adjusted_mRNA_Design_',diffstate,'.tsv'),
                      name = paste('Adjusted Design',diffstate),
                      parentId = code$properties$id)
+  
+  synSetAnnotations(DESIGN_OBJ) <- list(dataType="mRNA", fileType="Design", fileSubType="Adjusted",
+                                        fixedEffects=voomExpr[[diffstate]]$postAdjustCovars,
+                                        randomEffects="Donor_ID", Diffname_short=diffstate)
+  
   DESIGN_OBJ <- synStore(DESIGN_OBJ, used = ALL_USED_IDs, activityName = ActivityName, 
                          executed = thisFile)
 }
