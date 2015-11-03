@@ -153,7 +153,11 @@ save(vectors, result, resultTable, resultTableFixed,
 folder <- synStore(Folder("Discordant", parentId="syn3237603"))
 w <- synGetWiki(folder)
 
+repo <- rGithubClient::getRepo("kdaily/pcbc_c4_analysis", ref="branch", refName="discordant_de_sc")
+thisScript <- rGithubClient::getPermlink(repo, repositoryPath="code/R/discordant_mRNA_miRNA.R")
+
 o <- File("discordant_mRNA_miRNA__DE_SC.Rdata", parentId=synGetProperty(folder, "id"))
-annotations(o) <- list(fileType="RData", dataType=c("mRNA", "miRNA"))
+annotations(o) <- list(fileType="RData", dataType=c("mRNA", "miRNA"), comparison="All__DE_vs_SC")
 o <- synStore(o, used=c(mrna_metdata_id, mirna_metdata_id, mrna_id, mirna_id,
-                        diffexpr_mrna_id, diffexpr_mirna_id))
+                        diffexpr_mrna_id, diffexpr_mirna_id),
+              executed=thisScript)
