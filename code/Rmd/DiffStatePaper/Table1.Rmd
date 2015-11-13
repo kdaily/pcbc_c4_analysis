@@ -46,8 +46,7 @@ allData <- rbind(rnaData, mirnaData, methylationData)
 allData[allData == "N/A"] <- NA
 
 allData <- allData %>%
-  filter(Diffname_short %in% orderedDiffState, !is.na(Cell_Line_Type),
-         pass_qc | is.na(pass_qc))
+  filter(Diffname_short %in% orderedDiffState, !is.na(Cell_Line_Type))
 
 ```
 
@@ -67,13 +66,13 @@ For covariates, counts are of individual cell lines; for assays, counts are of i
 
 ```{r}
 foo <- metadata %>% 
-  select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
+  select(dataType, Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
          Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
   unique %>%
-  melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
+  melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short", "dataType"))
 
 bar <- foo %>% 
-  group_by(Diffname_short, variable, value) %>%
+  group_by(Diffname_short, dataType, variable, value) %>%
   tally
 
 groupingInfo <- bar %>%
@@ -84,7 +83,7 @@ groupingInfo <- bar %>%
 
 baz <- bar %>%
   summarize(s=paste(n, collapse="/")) %>%
-  dcast(variable ~ Diffname_short, value.var="s")
+  dcast(variable + dataType ~ Diffname_short, value.var="s")
 
 baz2 <- allData %>% 
   select(Diffname_short, dataType, UID) %>%
@@ -95,8 +94,10 @@ baz2 <- allData %>%
   rename(variable=dataType)
 
 baz2[is.na(baz2)] <- 0
+```
 
-rbind(baz, baz2) %>%
+```{r baz}
+baz %>%
   mutate(variable=gsub("_", " ", variable)) %>%
   kable
 ```
@@ -108,4 +109,11 @@ groupingInfo %>%
   mutate(variable=gsub("_", " ", variable)) %>% 
   kable
 ```
+
+```{r}
+baz2 %>%
+  mutate(variable=gsub("_", " ", variable)) %>%
+  kable
+```
+
 
