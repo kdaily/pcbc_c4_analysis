@@ -1,0 +1,111 @@
+```{r setup, include=FALSE}
+library(synapseClient)
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(reshape2)
+library(knitr)
+synapseLogin()
+
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+
+orderedDiffState <- c("SC", "EB", "DE", "MESO-5", "MESO-15", "MESO-30", "ECTO")
+
+# # Knit to Synapse
+# knit2synapse::knitfile2synapse("./code/Rmd/DiffStatePaper/Table1.Rmd", owner='syn4906072', overwrite=TRUE)
+```
+
+```{r query}
+# Which columns to consider
+colsToUse <- c('UID', 'biologicalSampleName',
+               'C4_Cell_Line_ID', 'Originating_Lab_ID', 'Originating_Lab', 'Cell_Line_Type',
+               'Cell_Type_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Vector_Type',
+               'Reprogramming_Gene_Combination', 'pass_qc', 'exclude', 'Diffname_short',
+               'Gender')
+
+# query the table with specific columns
+colsToUseStr <- paste(colsToUse, collapse=",")
+queryTemplate <- "select %s from file where benefactorId=='syn1773109' and dataType=='%s'"
+
+rnaData <- synTableQuery("SELECT * FROM syn3156503")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="mRNA")
+
+mirnaData <- synTableQuery("SELECT * FROM syn3219876")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="miRNA")
+
+methylationData <- synTableQuery("SELECT * FROM syn3156828")@values %>%
+  select(one_of(colsToUse)) %>%
+  mutate(dataType="methylation")
+
+# Combine the data together
+allData <- rbind(rnaData, mirnaData, methylationData)
+allData[allData == "N/A"] <- NA
+
+allData <- allData %>%
+  filter(Diffname_short %in% orderedDiffState, !is.na(Cell_Line_Type),
+         pass_qc | is.na(pass_qc))
+
+```
+
+```{r metadata}
+# Filter metadata based on unique biological samples, not UIDs
+metadata <- allData %>%
+  select(dataType, biologicalSampleName, C4_Cell_Line_ID, Diffname_short,
+         Cell_Line_Type, Reprogramming_Vector_Type, Reprogramming_Gene_Combination,
+         Tissue_of_Origin, Cell_Line_Type, Gender) %>%
+  unique()
+
+```
+
+### Summary Table
+
+For covariates, counts are of individual cell lines; for assays, counts are of individual experiments (cell line + differentiation state + replicate; e.g., by `UID`).
+
+```{r}
+foo <- metadata %>% 
+  select(Diffname_short, C4_Cell_Line_ID, Reprogramming_Vector_Type, 
+         Reprogramming_Gene_Combination, Cell_Line_Type, Tissue_of_Origin, Gender) %>%
+  unique %>%
+  melt(id.vars=c("C4_Cell_Line_ID", "Diffname_short"))
+
+bar <- foo %>% 
+  group_by(Diffname_short, variable, value) %>%
+  tally
+
+groupingInfo <- bar %>%
+  ungroup %>%
+  select(one_of(c("variable", "value"))) %>%
+  unique %>% group_by(variable) %>%
+  summarize(s=paste(unique(value), collapse=", "))
+
+baz <- bar %>%
+  summarize(s=paste(n, collapse="/")) %>%
+  dcast(variable ~ Diffname_short, value.var="s")
+
+baz2 <- allData %>% 
+  select(Diffname_short, dataType, UID) %>%
+  unique %>%
+  group_by(Diffname_short, dataType) %>%
+  tally %>%
+  dcast(dataType ~ Diffname_short, value.var="n") %>%
+  rename(variable=dataType)
+
+baz2[is.na(baz2)] <- 0
+
+rbind(baz, baz2) %>%
+  mutate(variable=gsub("_", " ", variable)) %>%
+  kable
+```
+
+### Variable information
+```{r}
+groupingInfo %>%
+  rename(values=s) %>% 
+  mutate(variable=gsub("_", " ", variable)) %>% 
+  kable
+```
+
