@@ -1,0 +1,245 @@
+---
+title: "Differential expression analysis of minfi curated methylation data with mixed effect modeling"
+author: "Thanneer Perumal"
+date: '`r date()`'
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")
+
+# Load required libraries
+library('synapseClient')
+library('RColorBrewer')
+library('ggplot2')
+library('gplots')
+library('limma')
+library('edgeR')
+library('ctv')
+library('psych')
+library('reshape2')
+library('vcd')
+library('erer')
+library('fpc')
+library('data.table')
+library('dplyr')
+library('plyr')
+library('knitr')
+library('stringr')
+library('minfi')
+library('org.Hs.eg.db')
+library('knit2synapse')
+
+## Needs the dev branch
+library(rGithubClient)
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+# knitToFolderEntity(file = "./DiffExpAnal_methylation_mixedEffects.Rmd", 
+#                    parentId = 'syn4231339',
+#                    entityName = 'Differential Expression Analysis Methylation Mixed Effects Model All', 
+#                    overwrite=F)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+# These should be moved to a package - very fragile way to do this!
+file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
+tmp = sapply(file.sources, source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Download data
+```{r setup, include=FALSE}
+# Input Parameters
+EXP_ID = 'syn4487642'
+COVARIATES_ID = 'syn4487669'
+DESIGN_ID = 'syn4487672'
+
+parentId = 'syn4231339'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c("Diffname_short", "BeadChip", "Row", "Column", "Cell_Line_Type", 
+                     "Tissue_of_Origin", "Reprogramming_Gene_Combination", "Culture_Conditions",  
+                     "Other_Conditions_During_Reprogramming", "Donor_Life_Stage", "Gender", 
+                     "Originating_Lab", "Donor_ID", "Cell_Type_of_Origin_Level2",
+                     "Reprogramming_Vector_Type" )
+ContCovariates = c("PassageAtThaw", "PassageAtDNAHarvest")
+```
+Factor covariates considered for analysis are `r paste(gsub('_','\\\\_',FactorCovariates),collapse=',')`, and continuous covariates considered for the analysis are `r paste(gsub('_','\\\\_',ContCovariates),collapse=',')`
+
+Obtain filtered beta values, covariates and design matrices from synapse
+```{r getdata, cache=TRUE, include=FALSE}
+# Get filtered beta values
+EXP_OBJ = synGet(EXP_ID)
+ALL_USED_IDs = EXP_OBJ$properties$id
+EXP = fread(getFileLocation(EXP_OBJ))
+tmp = read.table(getFileLocation(EXP_OBJ), sep = '\t', header=T, check.names=F, nrow=1)
+setnames(EXP, colnames(EXP), colnames(tmp))
+EXP = as.data.frame(EXP)
+rownames(EXP) = EXP[,1]
+
+# Get filtered metadata
+COVARIATES_OBJ = synGet(COVARIATES_ID)
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = COVARIATES_OBJ$properties$id
+COVARIATES = read.table(getFileLocation(COVARIATES_OBJ), sep='\t', header=T, stringsAsFactors = F)
+
+# Get design matrix
+DESIGN_OBJ = synGet(DESIGN_ID)
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = DESIGN_OBJ$properties$id
+DESIGN = read.table(getFileLocation(DESIGN_OBJ), sep='\t', header=T, stringsAsFactors = F, row.names=1)
+DESIGN = data.matrix(DESIGN)
+
+# Get probe related metadata
+fData = get450KProbeMapping(EXP[['methProbeID']])
+```
+Synapse id of used matrices
+
+| **Name**            | **Synapse ID**                                                           |
+| Filtered Expression | `r paste(EXP_ID,EXP_OBJ$properties$versionNumber,sep='.')`               |
+| Covariates          | `r paste(COVARIATES_ID,COVARIATES_OBJ$properties$versionNumber,sep='.')` |
+| Design              | `r paste(DESIGN_ID,DESIGN_OBJ$properties$versionNumber,sep='.')`         |
+
+Probability density function of expression
+```{r density.calculations}
+tmp = melt(EXP, id = 'methProbeID')
+```
+```{r density.plots, fig.height=6, fig.width=6}
+print(ggplot(tmp, aes(x = value)) + geom_density()+ ggtitle('Residual Expression'))
+```
+```{r beta.density, include=FALSE}
+tmp1 = fread(synGet('syn2233188')@filePath, data.table=F)
+setnames(tmp1,'ProbeID','methProbeID')
+tmp1 = tmp1[tmp1$methProbeID %in% EXP$methProbeID,colnames(tmp1) %in% colnames(EXP)]
+tmp1 = melt(tmp1, id = 'methProbeID')
+```
+```{r density.plots1, cache=TRUE, fig.height=6, fig.width=6}
+print(ggplot(tmp1, aes(x = value)) + geom_density()+ ggtitle('Beta'))
+```
+Perform differential expression
+```{r diff.exp, fig.width=6, fig.height=6}
+EXP = EXP[,-(1)]
+# Estimate correlation of random effects
+correlation <- duplicateCorrelation(EXP, design = DESIGN, block=COVARIATES$Donor_ID)
+  
+# Fit linear model
+FIT = lmFit(EXP, 
+            design = DESIGN, 
+            block=COVARIATES$Donor_ID, 
+            correlation = correlation$cor)
+
+# Make contrast to check differential expression between different differentiation stages
+CONT.TO.CHECK = c('Diffname_short', 'Culture_Conditions','Donor_Life_Stage')
+  
+ALL.CONT = c()
+for (name in CONT.TO.CHECK){
+  CONT.NAMES <- colnames(DESIGN)[grep(name,colnames(DESIGN))]
+  CONT.NAMES <- combn(CONT.NAMES,2)
+  CONT.NAMES <- apply(CONT.NAMES,2,paste,collapse='-')
+  
+  CONT <- makeContrasts(contrasts=CONT.NAMES,levels=colnames(FIT$coefficients))
+  colnames(CONT) <- sapply(colnames(CONT),function(x, name){x <- gsub(name,'',x);
+                                                            x <- gsub('-','_vs_',x);
+                                                            x <- paste('All',x,sep='__')}, name)
+  ALL.CONT = cbind(ALL.CONT, CONT)
+}
+
+# Refit contrasts
+FIT.CONTRAST <- contrasts.fit(FIT,ALL.CONT)
+    
+# Estimate moderated t-statistics
+FIT.CONTRAST <- eBayes(FIT.CONTRAST)
+  
+# Obtain all the differential expession combinations
+DIFF.EXP <- list()
+DIFF.EXP$logFC <- data.frame(row.names = rownames(EXP))
+DIFF.EXP$adj.P.Val <- data.frame(row.names = rownames(EXP))
+DIFF.EXP$SIG.SETS <- data.frame()
+
+for (name in colnames(ALL.CONT)){
+  tmp <- topTable(FIT.CONTRAST, coef=name, number=dim(EXP)[1])    
+  DIFF.EXP$logFC[,name] <- tmp[rownames(DIFF.EXP$logFC),'logFC']
+  DIFF.EXP$adj.P.Val[,name] <- tmp[rownames(DIFF.EXP$adj.P.Val),'adj.P.Val'] 
+  
+  DIFF.EXP$SIG.SETS <- rbind(DIFF.EXP$SIG.SETS,
+                             getUpDownGenes(DIFF.EXP$adj.P.Val[,name], 
+                                            DIFF.EXP$logFC[,name], 
+                                            rownames(DIFF.EXP$logFC), 
+                                            name, 
+                                            FC_CUTOFF = 0))
+  
+}
+colnames(DIFF.EXP$SIG.SETS)[1] = 'methProbeIDs'  
+DIFF.EXP$SIG.SETS = merge(DIFF.EXP$SIG.SETS, fData$Annotation, by = 'methProbeIDs', all.x=T, all.y = F)
+
+# Get number of significantly differentialy expressed genes with adj.P.Val <= 0.05 and log2FC >= 0.5
+DIFF.EXP$SIG.EXP.POS <- DIFF.EXP$adj.P.Val<=0.05 & DIFF.EXP$logFC >= 0.5
+DIFF.EXP$NUM.SIG.EXP.POS <- colSums(DIFF.EXP$SIG.EXP.POS)
+  
+# Get number of significantly differentialy expressed genes with adj.P.Val <= 0.05 and logFC <= -0.5
+DIFF.EXP$SIG.EXP.NEG <- DIFF.EXP$adj.P.Val<=0.05 & DIFF.EXP$logFC <= -0.5
+DIFF.EXP$NUM.SIG.EXP.NEG <- colSums(DIFF.EXP$SIG.EXP.NEG)
+```
+Number of differentially expressed genes at DE stage for adj.P.Val <= 0.05 and logFC >= 0.5 or <= -0.5
+```{r print.num.diff}
+# Print differentially expressed genes and probes
+tmp1 = rownameToFirstColumn(as.data.frame(DIFF.EXP$NUM.SIG.EXP.POS),'ContrastNames')
+colnames(tmp1) = c('Contrast Names','Up Regulated')
+tmp2 = rownameToFirstColumn(as.data.frame(DIFF.EXP$NUM.SIG.EXP.NEG),'ContrastNames')
+colnames(tmp2) = c('Contrast Names','Down Regulated')
+
+kable(merge(tmp1,tmp2,by = 'Contrast Names', all = T), row.names = F)
+```
+```{r extract.results}
+logFC = rownameToFirstColumn(DIFF.EXP$logFC,'methProbeIDs')
+adjPVal = rownameToFirstColumn(DIFF.EXP$adj.P.Val,'methProbeIDs')
+Comparisons = DIFF.EXP$SIG.SETS
+```
+### Store files in synapse
+```{r synapse.store, include = FALSE, eval=FALSE, cache=FALSE}
+activityName='Differential Expression Analysis of minfi processed methylation data with mixed effects model'
+  
+thisFileName <- 'DiffExpAnal_methylation_mixedEffects.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='methyl')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Make folder and populate with wiki
+CODE <- Folder(name = 'Differential Expression Analysis Methylation Mixed Effects Model All', parentId = parentId)
+CODE <- synStore(CODE)
+
+# Store results: logFC
+write.table(logFC,file='./DiffExpAnal_methylation_mixedEffects_logFC.tsv',sep='\t',row.names=F,quote=F)
+FC_OBJ <- File('./DiffExpAnal_methylation_mixedEffects_logFC.tsv', name = 'logFC', parentId = CODE$properties$id)
+FC_OBJ <- synStore(FC_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+
+# Store results: adjPVal
+write.table(adjPVal,file='./DiffExpAnal_methylation_mixedEffects_adjPVal.tsv',sep='\t',row.names=F,quote=F)
+PVAL_OBJ <- File('./DiffExpAnal_methylation_mixedEffects_adjPVal.tsv', name = 'Adjusted PValue', parentId = CODE$properties$id)
+PVAL_OBJ <- synStore(PVAL_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+
+# Store results: gctFormat
+write.table(Comparisons, file='./DiffExpAnal_methylation_mixedEffects_comparisons.tsv',sep='\t',row.names=F,quote=F)
+COMP_OBJ <- File('./DiffExpAnal_methylation_mixedEffects_comparisons.tsv', name = 'Differentially Expressed Genes comparison list', parentId = CODE$properties$id)
+COMP_OBJ <- synStore(COMP_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+```
+|  *Results*                                           |  *SynapseID*                                                                 |
+|  --------------------------------------------------- |   -------------------------------------------------------------------------- | 
+|  logFC                                               |  `r paste(FC_OBJ$properties$id,FC_OBJ$properties$versionNumber,sep='.')`     |
+|  Adjusted P Value                                    |  `r paste(PVAL_OBJ$properties$id,PVAL_OBJ$properties$versionNumber,sep='.')` |
+|  Differentially Expressed Genes (comparison list)    |  `r paste(COMP_OBJ$properties$id,COMP_OBJ$properties$versionNumber,sep='.')` |

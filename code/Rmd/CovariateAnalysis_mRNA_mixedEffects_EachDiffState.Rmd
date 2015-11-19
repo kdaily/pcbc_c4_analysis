@@ -1,0 +1,544 @@
+---
+title: "Covariate Analysis for eXpress aligned mRNA data with mixed effect modeling performed at indivudal differentiation stages"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE, cache=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('synapseClient')
+library('RColorBrewer')
+library('ggplot2')
+library('gplots')
+library('limma')
+library('edgeR')
+library('ctv')
+library('psych')
+library('reshape2')
+library('vcd')
+library('erer')
+library('fpc')
+library('data.table')
+library('dplyr')
+library('knitr')
+library('stringr')
+
+## Needs the dev branch
+library('rGithubClient')
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+# knit2synapse::knitToFolderEntity(file = "./CovariateAnalysis_mRNA_mixedEffects_EachDiffState.Rmd", 
+#                                  entityName = 'Covariate Analysis mRNA Mixed Effects EachDiffState', 
+#                                  parentId = 'syn5008933', overwrite=F, knitmd = TRUE)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+# These should be moved to a package - very fragile way to do this!
+file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
+tmp = sapply(file.sources, source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Download data
+```{r setup, include=TRUE}
+# Input Parameters
+COUNT_ID = 'syn5008587'
+METADATA_ID = 'syn3156503'
+
+SYNAPSE_STORE = T
+parentId = 'syn5008933'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c('Diffname_short', 'run', 'lane', 'Cell_Line_Type', 'Cell_Line_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Gene_Combination', 'Culture_Conditions', 'Donor_Life_Stage', 'Gender', 'Originating_Lab', 'Donor_ID', 'Cell_Type_of_Origin_Level2', 'Reprogramming_Vector_Type')
+ContCovariates = c('PassageAtThaw', 'PassageAtHarvest')
+```
+
+The eXpress-generated effective count matrix that has been collapsed from transcripts to genes is used (`r COUNT_ID`). 
+
+The metadata comes from the table `r METADATA_ID`. 
+
+Factor covariates considered for analysis are:
+
+```{r factorcov}
+paste(gsub('_','\\\\_',FactorCovariates),collapse=', ')
+```
+
+The continuous covariates considered for the analysis are:
+
+```{r contcov}
+paste(gsub('_','\\\\_',ContCovariates),collapse=', ')
+```
+
+```{r getdata, cache=FALSE, include=TRUE}
+# Get count matrix
+COUNT_OBJ = synGet(COUNT_ID)
+ALL_USED_IDs = COUNT_OBJ$properties$id
+COUNT = fread(getFileLocation(COUNT_OBJ), data.table=FALSE)
+row.names(COUNT) = COUNT[,1]
+COUNT = COUNT[,-(1)]
+```
+
+```{r getmetadata, cache=FALSE, include=TRUE}
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '))
+ALL_USED_IDs <- c(ALL_USED_IDs, METADATA_OBJ@schema)
+METADATA = METADATA_OBJ@values
+
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName,
+                     -public, -pass_qc, -exclude) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Filter data
+* Keep only public samples
+* Remove somatic samples and samples with not type.
+* Remove samples that failed QC and samples classified as exclude.
+* Remove samples with abnormal karyotypes.
+```{r filtering, echo=TRUE, include=TRUE}
+#### Pre processing mRNA expression counts and metadata ####
+metadata_keep <- METADATA %>% 
+  filter(UID %in% colnames(COUNT))
+
+metadata_filtered <- metadata_keep %>%
+  filter(public, pass_qc, !exclude,
+         Diffname_short != "",
+         Cell_Type == "PSC",
+         C4_Karyotype_Result != "abnormal")
+
+REMOVED_UID <- setdiff(metadata_keep$UID, metadata_filtered$UID)
+METADATA <- metadata_filtered
+rownames(METADATA) <- metadata_filtered$UID
+COUNT <- COUNT[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed from the expression matrix:
+
+`r paste(gsub('_','\\\\_',REMOVED_UID), collapse= ',')` 
+
+### CPM Normalisation
+Determine design matrix for normalisation and differential expression analysis. 
+
+Remove genes that have less than 1 cpm counts in at least 50% of each of the individual differentiation stages.
+```{r cpmnormalisation}
+# Does not do any filtering, only puts data into the format required
+
+getProcessedCounts <- function(cols,counts){
+  PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(counts[,cols], 
+                                                   MIN_GENE_CPM=1,
+                                                   MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM=0.5)
+}
+
+PROCESSED_COUNTS <- tapply(colnames(COUNT),
+                           factor(METADATA$Diffname_short),
+                           getProcessedCounts,
+                           COUNT)
+```
+`r dim(COUNT)[1]` genes and `r dim(COUNT)[2]` samples are considered for the analysis.
+```{r data.split}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+
+# Split covariates by diffname short
+COVARIATES = split(COVARIATES,COVARIATES$Diffname_short)
+```
+### Covariate clustering
+Covariate correlation
+```{r covariates.correlation, fig.width=10, fig.height=10}
+covariateCorrelation <- function(covariates){  
+  Diffname = unique(covariates$Diffname_short)
+  cat("----\n", 
+      paste('#### Differentiation state:',as.character(Diffname)),
+      sep="")
+
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Correlation between covariates
+  covariates.correlation = getAssociationStatistics(covariates, PVAL = 0.1)  
+  ggheatmap.show(covariates.correlation$plot, col.width=0.3, row.width=0.15)
+  
+  return(list(COVARIATES.CORRELATION = covariates.correlation))
+}
+
+COVARIATES.CORRELATION = lapply(COVARIATES, covariateCorrelation)
+```
+### Normalisation (with NULL)
+Initial normalisation usign voom (with NULL design)
+```{r initial.voom.normalisation}
+initialVoomNormalisation <- function(covariates, processed_counts){
+  
+  diffState = unique(covariates$Diffname_short)
+  
+  cat("----\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+
+    # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Initial normalisation of gene expression
+  gene.expression = voom(processed_counts[[diffState]]$filteredExprMatrix, design=NULL, plot=T)
+    
+  # Initial design matrix with covariates under consideration  
+  dm = getDesignMatrix(covariates, Intercept = F)
+  
+  return(list(GENE.EXPRESSION = gene.expression,
+              COVARIATES = covariates,
+              DM = dm))
+}
+VOOM.GENE.EXPRESSION.PREADJUSTED = lapply(COVARIATES, initialVoomNormalisation, PROCESSED_COUNTS)
+```
+
+Clustering of initial normalised data (with NULL design)
+```{r decompse.normalise.data, fig.height=8, fig.width=8}
+plotPCAGeneExpression <- function(covariates, voomExpression){ 
+  diffState = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Find principal components of expression to plot
+  PC <- prcomp(voomExpression[[diffState]]$GENE.EXPRESSION$E)
+  
+  # Plot first 2 PCs
+  plotdata <- data.frame(UID=rownames(PC$rotation), 
+                         PC1=PC$rotation[,1], 
+                         PC2=PC$rotation[,2])
+
+  plotdata <- merge(plotdata, METADATA, by="UID")
+  plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+  p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+  p <- p + geom_point(aes(color=Cell_Line_Type, 
+                          shape=Reprogramming_Vector_Type, 
+                          size=Gender))
+  p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) 
+  p <- p + scale_shape_manual(values=1:length(unique(covariates$Reprogramming_Vector_Type)))
+  p <- p + theme(legend.position="top") 
+  p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+  print(p)
+  
+  return(list(p = p))
+}
+PCA.GENE.EXPRESSION = lapply(COVARIATES, plotPCAGeneExpression, VOOM.GENE.EXPRESSION.PREADJUSTED)
+```
+
+### Significant Covariates
+Correlation between pca of unadjusted mRNA expression and covariates is used to find significant covariates
+```{r preAdjusted.covariates, fig.width=25, fig.height=12}
+plotGeneCovariatesCorrelation <- function(covariates, voomExpr){
+  diffState = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Find correlation between PC's of gene expression with covariates
+  dm = getDesignMat2Fact(voomExpr[[diffState]]$DM$design,
+                             FactorCovariates)
+  
+  colnames(dm) = substr(colnames(dm),1,50)
+  
+  tmpExpr <- voomExpr[[diffState]]$GENE.EXPRESSION$E
+  preAdjustedSigCovars = runPCAandPlotCorrelations(tmpExpr, dm,
+                                                   'NULL design(voom-normalized)', 
+                                                   isKeyPlot=TRUE)
+  
+  # Plot preAdjustedSigCovars
+  print(preAdjustedSigCovars[["PC_res"]][[2]]$plotData)  
+  
+  # Find significant covariates
+  tmpDm <- voomExpr[[diffState]]$DM
+  adjustCovars = designMatVarsToCovars(getCovariatesMap(tmpDm),
+                                       preAdjustedSigCovars$significantCovars)
+
+  
+  cat("----\n",
+      paste('Significant covariates to adjust at FDR 0.1 are:\n',
+            paste(gsub('_','\\\\_',adjustCovars), collapse= ', ')),
+      sep="")
+  writeLines('')
+  
+  return(list(adjustCovars = adjustCovars,
+              preAdjustedSigCovars = preAdjustedSigCovars))  
+}
+PREADJUSTED.COVARIATES = lapply(COVARIATES, plotGeneCovariatesCorrelation,
+                                VOOM.GENE.EXPRESSION.PREADJUSTED)
+```
+
+### Normalisation (iterative)
+Since many covariates are correlated, re-normalising COVARIATES with an iterative design matrix. All effects are considered as fixed effects, except Donor_ID which is a random effect.
+```{r iterative.adjusted.voom.normalisation, fig.width=25, fig.height=12}
+iterativeNormalisation <- function(covariates, processedCounts, voomExpr,
+                                   preadjustedCovariates) {  
+  diffState = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
+  
+  # Assign return values
+  FIT = c()
+  CORRELATION = c()
+  RESIDUAL.GENE.EXPRESSION = c()  
+  postAdjustCovars = c()
+  GENE.EXPRESSION = c()
+  
+  # Covariate to levels mapping
+  covariateMapping <- getCovariatesMap(voomExpr[[diffState]]$DM)
+  
+  # Assign residual covariates
+  residualSigCovars = preadjustedCovariates[[diffState]]$preAdjustedSigCovars
+  
+  significantCovars = designMatVarsToCovars(covariateMapping,
+                                            residualSigCovars$significantCovars)
+  
+  covariatesEffects = designMat2CovEffects(covariateMapping,
+                                           residualSigCovars$Effects.significantCovars)
+  
+  covariatesEffects = covariatesEffects[setdiff(significantCovars, c(postAdjustCovars,'Donor_ID'))]
+    
+  postAdjustCovars = names(which.max(covariatesEffects))
+  
+  DESIGN = dplyr::select(as.data.frame(voomExpr[[diffState]]$DM$design),-starts_with('Donor_ID'))
+  colnames(DESIGN) = substr(colnames(DESIGN),1,50)
+  
+  loopCount = 0 
+  while(length(residualSigCovars$significantCovars)!=0 && loopCount <= 15){
+    writeLines(paste('Using following covariates in the model:',
+                paste(paste(gsub('_','\\\\_',postAdjustCovars),collapse=', '),'as fixed effects'),
+                sep=':'))
+    
+    # Post adjusted design matrix
+    DM1 = getDesignMatrix(covariates[,postAdjustCovars,drop=F],Intercept = F)
+    DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
+    
+    # Estimate sample weights with null design
+    GENE.EXPRESSION = voom(processedCounts[[diffState]]$filteredExprMatrix, 
+                           design = DM1$design, 
+                           plot=F)
+    
+    # Estimate correlation between donor effects
+    CORRELATION = duplicateCorrelation(GENE.EXPRESSION, 
+                                       design = DM1$design,
+                                       block = covariates$Donor_ID)
+    
+    if(abs(CORRELATION$cor) == 1 || abs(CORRELATION$cor) == 0){
+      writeLines('Random effects correlation cannot be estimated')
+      break
+    }
+    
+    # Estimate sample weights with correlation efects
+    GENE.EXPRESSION = voom(processedCounts[[diffState]]$filteredExprMatrix, 
+                           design = DM1$design,
+                           block = covariates$Donor_ID,
+                           correlation = CORRELATION$consensus.cor,
+                           plot=F)
+    
+    # Fit linear model with chosen design
+    FIT = lmFit(GENE.EXPRESSION,
+                block = covariates$Donor_ID,
+                correlation = CORRELATION$consensus.cor)
+    
+    # Residuals after normalisation
+    RESIDUAL.GENE.EXPRESSION = residuals.MArrayLM(FIT,GENE.EXPRESSION$E)
+    
+    # Residual covariates to choose from
+    residCovars <- setdiff(c(FactorCovariates,ContCovariates), postAdjustCovars)
+    
+    # Find PC of residual gene expression and significant covariates that are highly correlated with PCs    
+    residualSigCovars = runPCAandPlotCorrelations(RESIDUAL.GENE.EXPRESSION, 
+                                                  DESIGN,
+                                                  'residuals(voom-normalized)',
+                                                  isKeyPlot=TRUE)
+    
+    # Add postadjusted covariates (if any)
+    significantCovars = designMatVarsToCovars(covariateMapping, 
+                                              residualSigCovars$significantCovars)
+    covariatesEffects = designMat2CovEffects(covariateMapping,
+                                             residualSigCovars$Effects.significantCovars)
+    covariatesEffects = covariatesEffects[setdiff(significantCovars,
+                                                  c(postAdjustCovars,'Donor_ID'))]
+    
+    postAdjustCovars = c(postAdjustCovars, names(which.max(covariatesEffects)))
+    write.table(diffState, file = './temp.txt', append=T, col.names=F,row.names=F,quote=F)
+    write.table(paste(postAdjustCovars, collapse=','), file = './temp.txt', 
+                append=T, col.names=F,row.names=F,quote=F)
+    loopCount = loopCount + 1
+  }
+  
+  writeLines('----')
+  writeLines(paste('Using following covariates in the final model:\n', 
+                   paste(paste(gsub('_','\\\\_',postAdjustCovars), collapse=', '),
+                         'as fixed effects')))
+  writeLines('')
+  
+  return(list(GENE.EXPRESSION = GENE.EXPRESSION,
+              FIT = FIT,
+              RESIDUAL.GENE.EXPRESSION = RESIDUAL.GENE.EXPRESSION,
+              residualSigCovars = residualSigCovars,
+              postAdjustCovars = postAdjustCovars))
+}  
+VOOM.GENE.EXPRESSION.POSTADJUSTED = lapply(COVARIATES, iterativeNormalisation, 
+                                           PROCESSED_COUNTS, 
+                                           VOOM.GENE.EXPRESSION.PREADJUSTED, 
+                                           PREADJUSTED.COVARIATES)
+```
+
+### Synapse Store
+Store processed cpm counts, covariates, design matrix, and voom adjusted gene expression matrices
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE, cahce=FALSE}
+ActivityName <- 'Covariate Analysis of eXpress aligned mRNA data at each diff state with mixed effects'
+  
+thisFileName <- 'CovariateAnalysis_mRNA_mixedEffects_EachDiffState.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", refName='mRNA')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Populate wiki with results
+CODE <- Folder(name = 'Covariate Analysis mRNA Mixed Effects EachDiffState', 
+               parentId = parentId)
+CODE <- synStore(CODE)
+
+storeFilesInSynapse <- function(covariates, processedCounts, 
+                                postAdjustedCovars, code) {
+  diffState = unique(covariates$Diffname_short) %>% as.character
+    
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
+  
+  # Store Covariates Matrix
+  covariates <- rownameToFirstColumn(covariates, 'UID')
+  write.table(covariates,
+              file = paste0('./Filtered_mRNA_Covariates_',diffState,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  covariates.obj <- File(paste0('Filtered_mRNA_Covariates_',diffState,'.tsv'),
+                         name = paste('Filtered Covariates',diffState),
+                         parentId = code$properties$id)
+
+  annotations(covariates.obj) <- list(dataType  = 'mRNA',
+                                      fileType	= 'Covariates',
+                                      Diffname_short	= diffState,
+                                      fileSubType	= 'Filtered',
+                                      postAdjustCovars = paste(postAdjustedCovars[[diffState]]$postAdjustCovars, collapse = ","))
+  
+  covariates.obj <- synStore(covariates.obj, used = ALL_USED_IDs,
+                             activityName = ActivityName, executed = thisFile)
+  
+  # Store filtered counts matrix
+  filteredCounts <- processedCounts[[diffState]]$filteredExprMatrix$counts
+  filteredCounts <- rownameToFirstColumn(filteredCounts, 'GeneName')
+  
+  write.table(filteredCounts,
+              file = paste0('./Filtered_CPM_Counts_',diffState,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  counts.obj <- File(paste0('./Filtered_CPM_Counts_',diffState,'.tsv'),
+                     name = paste('Filtered CPM Counts',diffState),
+                     parentId = code$properties$id)
+  
+  annotations(counts.obj) <- list(dataType  = 'mRNA', fileType  = 'GenomicMatrix',
+                                  Diffname_short	= diffState, fileSubType	= 'Filtered')
+  
+  counts.obj <- synStore(counts.obj, used = ALL_USED_IDs, 
+                         activityName = ActivityName, executed = thisFile) 
+  
+  # Adjustment Weights
+  weights <- cbind(processedCounts[[diffState]]$filteredExprMatrix$genes,
+                   postAdjustedCovars[[diffState]]$GENE.EXPRESSION$weights)
+  colnames(weights) <- c('GeneNames',
+                         rownames(processedCounts[[diffState]]$filteredExprMatrix$samples))
+  write.table(weights,
+              file = paste0('./Adjusted_mRNA_Weights_',diffState,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  weights.obj <- File(paste0('Adjusted_mRNA_Weights_',diffState,'.tsv'),
+                      name = paste('Adjusted Weights',diffState),
+                      parentId = code$properties$id)
+  
+  annotations(weights.obj) <- list(dataType  = 'mRNA', fileType  = 'WeightsMatrix',
+                                  Diffname_short  = diffState, fileSubType	= 'Adjusted')
+  
+  weights.obj <- synStore(weights.obj, used = ALL_USED_IDs, 
+                          activityName = ActivityName, executed = thisFile)
+      
+  # Design Matrix
+  design <- postAdjustedExpression[[diffState]]$GENE.EXPRESSION$design
+  design <- rownameToFirstColumn(design, 'UID')
+
+  write.table(design,
+              file = paste0('./Adjusted_mRNA_Design_',diffState,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  design.obj <- File(paste0('Adjusted_mRNA_Design_',diffState,'.tsv'),
+                     name = paste('Adjusted Design',diffState),
+                     parentId = code$properties$id)
+  
+  annotations(design.obj) <- list(dataType  = 'mRNA', fileType  = 'DesignMatrix',
+                                  Diffname_short  = diffState, fileSubType	= 'Adjusted')
+  
+  design.obj <- synStore(design.obj, used = ALL_USED_IDs, 
+                         activityName = ActivityName, executed = thisFile)
+  
+  return(c(COUNT = paste(counts.obj@properties$id, counts.obj@properties$versionNumber, sep = '.'),
+           COVARIATES = paste(covariates.obj@properties$id, covariates.obj@properties$versionNumber, sep = '.'),
+           DESIGN = paste(design.obj@properties$id, design.obj@properties$versionNumber, sep = '.'),
+           WEIGHTS = paste(weights.obj@properties$id, weights.obj@properties$versionNumber, sep = '.')))
+}
+
+STORED.FILES = sapply(COVARIATES[! names(COVARIATES) %in% c('MESO15','MESO30')], 
+                      storeFilesInSynapse, PROCESSED_COUNTS, 
+                      VOOM.GENE.EXPRESSION.POSTADJUSTED, CODE)
+```
+### Results
+```{r print.results}
+kable(STORED.FILES)
+```
+
+### Executed: Source code
+`r paste0('[Source R Markdown](',print(thisFile),')')`

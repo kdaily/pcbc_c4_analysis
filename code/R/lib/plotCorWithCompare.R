@@ -35,7 +35,7 @@ plotCorWithCompare <- function(plotCor, title=NULL, MARK_CORRELATIONS_NAME=NULL,
   gRes = ggplot(plotCor, plot_aes) + geom_tile() + scale_alpha_manual(values=alphaVals, guide="none")
   
   gRes = gRes + xlab("") + ylab("")
-  gRes = gRes + theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5, size=6, face=use.face.x, color=use.color.x), axis.text.y=element_text(size=8, color="black", hjust=0))
+  gRes = gRes + theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5, size=14, face=use.face.x, color=use.color.x), axis.text.y=element_text(size=14, color="black", hjust=0))
   gRes = gRes + theme(panel.grid.major.x=element_line(color="black", linetype="dashed")) + theme(panel.grid.minor.x=element_blank())
   gRes = gRes + theme(panel.grid.major.y=element_blank()) + theme(panel.grid.minor.y=element_blank())
   gRes = gRes + theme(panel.background=element_rect(fill="white"))

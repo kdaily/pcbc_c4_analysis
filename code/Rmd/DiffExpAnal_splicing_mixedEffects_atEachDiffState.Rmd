@@ -1,0 +1,388 @@
+---
+title: "Differential splicing analysis for junctions from alt-analyse pipeline with mixed effect modeling performed at indivudal differentiation stages"
+author: "Thanneer Perumal"
+date: "`r date()`"
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE, cache=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('RColorBrewer')
+library('ggplot2')
+
+library('psych')
+library('reshape2')
+
+library('limma')
+library('vcd')
+library('data.table')
+library('plyr')
+library('dplyr')
+
+library('knitr')
+library('stringr')
+library('synapseClient')
+library('rGithubClient') ## Needs the dev branch
+
+synapseLogin()
+
+# knit2synapse::knitToFolderEntity(file = "./DiffExpAnal_splicing_mixedEffects_atEachDiffState.Rmd", 
+#                                  entityName = 'Differential Splicing Analysis Mixed Effects EachDiffState', 
+#                                  parentId = 'syn4991628', 
+#                                  overwrite=F, knitmd = T)
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R", full.names = TRUE)
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+
+```{r fxns, include=FALSE}
+# Function to rotate variables
+rotateVars <- function(x, first) {
+  others <- setdiff(x, first)
+  c(first, others)
+}
+
+# Function to make design matrix
+makeDesignMatrix <- function(covariates, comparison, covariateColOrder=NA) {
+  # Make a design matrix by reordering the column covariates
+  # and column-binding each separate matrix for each column together
+  # with complete listing of dummy variables (no reference levels)
+  # and also remove any linearly dependent columns
+  
+  vars <- ifelse(is.na(covariateColOrder), 
+                 colnames(covariates),
+                 covariateColOrder)
+  
+  newVars <- rotateVars(vars, comparison)
+  
+  DESIGN = getDesignMatrix(covariates[, newVars], Intercept = F)
+  DESIGN = DESIGN$design[, linColumnFinder(DESIGN$design)$indepCols]
+  
+  return(DESIGN)
+}
+
+# Perform differential splicing
+doDiffExpr <- function(countMat, designMat, weights, block, comparison, diffState) {
+  # Helper function to do all pairwise differential splicing on a single covariate
+  # from the whole covariate matrix
+  
+  # Make contrast  
+  contrastNames <- colnames(designMat)[grep(comparison, colnames(designMat))]
+  contrastNames <- combn(contrastNames, 2)
+  contrastNames <- apply(contrastNames, 2, paste, collapse='-')
+  
+  cont <- makeContrasts(contrasts=contrastNames, 
+                        levels=colnames(designMat))
+  
+  colnames(cont) <- sapply(colnames(cont),
+                           function(x, diffState){x <- gsub(comparison, '', x);
+                                       x <- gsub('-','_vs_',x);
+                                       x <- paste(diffState, x, sep='__')}, diffState)
+  
+  # Calculate correlation between donors
+  correlation <- duplicateCorrelation(countMat, 
+                                      design = designMat,
+                                      weights = weights,
+                                      block=block)
+  
+  if(abs(correlation$cor) == 1 || abs(correlation$cor) == 0){
+      cat('Random effects correlation cannot be estimated\n')
+      # Assign NA values to all results
+      foo1 = list()
+      
+      foo1$logFC = matrix(NA,1,dim(cont)[2]); 
+      colnames(foo1$logFC) = colnames(cont)
+      rownames(foo1$logFC) = rownames(countMat)[1]
+      
+      foo1$adj.P.Val = foo1$logFC
+      
+      foo1$SIG.SETS <- matrix(NA, 1, 4);
+      colnames(foo1$SIG.SETS) = c("GeneSymbol", "logFC", "adj.P.value", "Comparison")
+      
+      foo1$SIG.EXP.POS <- foo1$logFC
+      foo1$NUM.SIG.EXP.POS <- foo1$logFC; rownames(foo1$NUM.SIG.EXP.POS) = c()
+      foo1$SIG.EXP.NEG <- foo1$logFC
+      foo1$NUM.SIG.EXP.NEG <- foo1$logFC; rownames(foo1$NUM.SIG.EXP.NEG) = c()
+      
+      return(foo1)
+  }
+  
+  # Fit linear model using mixed effects design
+  fit = lmFit(countMat, 
+              design = designMat, 
+              weights = weights, 
+              block=block, 
+              correlation = correlation$cor)
+
+  # Refit contrasts
+  fitContrast <- contrasts.fit(fit, cont)
+  
+  # Estimate moderated t-statistics
+  fitContrast <- eBayes(fitContrast)
+  
+  # Obtain all the differential expession combinations
+  foo <- list()
+  foo$logFC <- data.frame(row.names = rownames(countMat))
+  foo$adj.P.Val <- data.frame(row.names = rownames(countMat))
+  foo$SIG.SETS <- data.frame()
+  
+  for (i in colnames(cont)){
+    tmp <- topTable(fitContrast, coef=i, number=dim(countMat)[1])    
+    foo$logFC[,i] <- tmp[rownames(foo$logFC),'logFC']
+    foo$adj.P.Val[,i] <- tmp[rownames(foo$adj.P.Val),'adj.P.Val'] 
+    
+    foo$SIG.SETS <- rbind(foo$SIG.SETS,
+                          getUpDownGenes(foo$adj.P.Val[,i], foo$logFC[,i], 
+                                         rownames(foo$logFC), i, FC_CUTOFF = 0))
+  }
+  
+  # Get number of significantly differentialy spliced junctions with adj.P.Val <= 0.05 and logFC >= 0
+  foo$SIG.EXP.POS <- foo$adj.P.Val<=0.05 & foo$logFC >= 0
+  foo$NUM.SIG.EXP.POS <- colSums(foo$SIG.EXP.POS, na.rm = T)
+  
+  # Get number of significantly differentialy spliced junctions with adj.P.Val <= 0.05 and logFC <= 0
+  foo$SIG.EXP.NEG <- foo$adj.P.Val<=0.05 & foo$logFC <= 0
+  foo$NUM.SIG.EXP.NEG <- colSums(foo$SIG.EXP.NEG, na.rm = T)
+  
+  return(foo)
+}
+```
+
+### Download data
+```{r setup, include=FALSE}
+# Input Parameters
+SOURCE.FOLDER_ID = 'syn5059731'
+
+SYNAPSE_STORE = T
+parentId = 'syn4991628'
+
+# Specify factor and continuous covariates pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c('Diffname_short', 'run', 'lane', 'Cell_Line_Type', 'Cell_Line_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Gene_Combination', 'Culture_Conditions', 'Donor_Life_Stage', 'Race', 'Ethnicity' , 'Gender', 'Disease', 'Originating_Lab', 'Donor_ID', 'Cell_Type_of_Origin_Level2', 'Reprogramming_Vector_Type')
+
+ContCovariates = c('PassageAtThaw', 'PassageAtHarvest')
+
+# Differentiation states
+DIFF.STATE = c('SC','DE','MESO5','ECTO','EB')
+```
+Obtain processed PSI, design, and covariates matrix from Synapse.
+```{r getdata, cache=TRUE, include=FALSE}
+downloadData <- function(diffState, sourceFolder.id, 
+                         factorCovariates, contCovariates){
+  
+  cat("----\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+  
+  # Get processed PSI matrix
+  processedPSI.id = synQuery(paste0('select id from file where parentId == "',sourceFolder.id,
+                                    '" and Diffname_short == "',diffState,
+                                    '" and fileType == "genomicMatrix"'))
+  processedPSI.obj = synGet(processedPSI.id$file.id)
+  allUsedIDs = processedPSI.obj$properties$id
+  processedPSI = fread(getFileLocation(processedPSI.obj), data.table=FALSE)
+
+  # Seperate PSI and PSI annotation
+  psiAnnotation = dplyr::select(processedPSI, one_of(c("Symbol", "Description", "Minor-Isoform", "Major Isoform", "AltExons", "PME",
+                                                       "dPSI", "rho", "Max Inclusion PSI", "Coordinates", "feature")))
+  processedPSI = processedPSI[, setdiff(colnames(processedPSI), colnames(psiAnnotation))]
+  rownames(processedPSI) = psiAnnotation$"Minor-Isoform"
+  colnames(processedPSI) = gsub('.bed','', colnames(processedPSI))
+
+  # Get sample covariates
+  covariates.id = synQuery(paste0('select id from file where parentId == "',sourceFolder.id,
+                                  '" and Diffname_short == "',diffState,
+                                  '" and fileType == "Covariates"'))
+  covariates.obj = synGet(covariates.id$file.id)
+  allUsedIDs = c(allUsedIDs, covariates.obj$properties$id)
+  covariates = fread(getFileLocation(covariates.obj), data.table=FALSE)
+  row.names(covariates) = covariates[,1]
+  covariates = covariates[,-(1)]
+
+  processedPSI = processedPSI[, rownames(covariates)]
+
+  # Convert factor covariates to factors
+  factorCovariates = intersect(colnames(covariates), factorCovariates)
+  covariates[,factorCovariates] = lapply(covariates[,factorCovariates], factor)
+  contCovariates = intersect(colnames(covariates), contCovariates)
+  covariates[,contCovariates] = lapply(covariates[,contCovariates], as.numeric)
+  
+  return(list( PSI = processedPSI,
+               COVARIATES = covariates,
+               ALL_USED_IDs = allUsedIDs,
+               postAdjustedCovars = annotations(covariates.obj)$fixedEffects))
+}
+
+PSI.COVARIATES = lapply(DIFF.STATE, downloadData, SOURCE.FOLDER_ID,
+                        FactorCovariates, ContCovariates)
+names(PSI.COVARIATES) = DIFF.STATE
+```
+
+### Differential splicing analysis (at each differentiation state)
+In each diffstae, for each covariate, we fit a linear model using `limma` with only the variables obtained from the covariate analysis
+
+The design matrix is formed by including all variables for each factor encoded as dummy variables, reordered so that the variable of interest for comparison is first. With this formulation and the available data, many design matrices are degenerate. Hence, we also remove any columns that are linear combinations of other columns. Because of this, models between separate covariates (separate columns in the covariate matrix) cannot be compared, as each comparison is performed with a separately defined model.
+
+```{r diff.splice}
+performDiffExpAnal <- function(diffState, psiCovariates){
+  cat("----\n",
+      paste0('#### Differentiation state: ',as.character(diffState), "\n"),
+      sep="")
+  
+  cat("Get differentially spliced junctions using limma package with following coefficients in the linear model:\n")
+  
+  cat("----\n",
+      "Get differentially spliced junctions using limma package with following coefficients in the linear model:\n",
+      paste0('Fixed Effects:',paste(psiCovariates[[diffState]]$postAdjustedCovars, collapse = ','), "\n"),
+      "Random Effects: Donor_ID")
+
+  diffExp = list()
+  for (comparison in setdiff(psiCovariates[[diffState]]$postAdjustedCovars, c("run","lane"))){
+    cat("----\n",
+      paste0("Performing differential expression analysis for comparison:", comparison,"\n"))
+   
+    DESIGN <- makeDesignMatrix(covariates = psiCovariates[[diffState]]$COVARIATES, 
+                               comparison = comparison, 
+                               covariateColOrder = psiCovariates[[diffState]]$postAdjustedCovars)
+
+    diffExp[[comparison]] <- doDiffExpr(countMat = psiCovariates[[diffState]]$PSI, designMat = DESIGN,
+                                         weights = NULL, block = psiCovariates[[diffState]]$COVARIATES$Donor_ID,
+                                         comparison = comparison, diffState = diffState)
+    # Rename columns
+    diffExp[[comparison]]$SIG.SETS = diffExp[[comparison]]$SIG.SETS %>% plyr::rename(c("GeneSymbol" = "Minor-Isoform"))    
+    
+    cat(paste0('Number of differentially spliced junctions between ',
+               comparison,
+               ' at FDR <= 0.05 and logFC >= 0 or logFC <= 0:\n'))
+
+#     tmp <- data.frame('No. OF UP REG. SPLICE JN.' = t(diffExp[[comparison]]$NUM.SIG.EXP.POS),
+#                       'No. OF DOWN REG. SPLICE JN.' = t(diffExp[[comparison]]$NUM.SIG.EXP.NEG))
+#     
+#     if (dim(tmp)[1] != 0){      
+#       print(kable(tmp))
+#     } else {
+#       cat('Not feasible to calculate \n')
+#     }
+  }
+    
+  allFC <- llply(lapply(diffExp, function(x){return(x$logFC)}),
+                 rownameToFirstColumn, colname = "Minor-Isoform") 
+
+  results = list()
+  results$FC <- plyr::join_all(allFC, by = 'Minor-Isoform', match = 'all') %>%
+    left_join(PSI.ANNOT)
+
+  allPVal <- llply(lapply(diffExp, function(x){ return(x$adj.P.Val)}),
+                   rownameToFirstColumn, colname="Minor-Isoform")
+
+  results$PVAL <- plyr::join_all(allPVal, by = 'Minor-Isoform', match = 'all') %>%
+    left_join(PSI.ANNOT)
+
+  allSig <- llply(lapply(diffExp, function(x){ 
+    return(x$SIG.EXP.POS + x$SIG.EXP.NEG)
+    }), rownameToFirstColumn, colname="Minor-Isoform")
+
+  results$SIG <- join_all(allSig, by = 'Minor-Isoform', match = 'all') %>%
+    left_join(PSI.ANNOT)
+
+  results$SIG.SETS <- rbindlist(lapply(diffExp, function(x){ return(as.data.frame(x$SIG.SETS)) })) %>% 
+    as.data.frame %>% plyr::rename(c("GeneSymbol" = "Minor-Isoform")) %>%
+    merge(PSI.ANNOT, by = "Minor-Isoform", all.x = T)
+  
+  return(results)
+}
+DIFF.EXP = lapply(DIFF.STATE, performDiffExpAnal, PSI.COVARIATES)
+names(DIFF.EXP) = DIFF.STATE
+```
+
+### Store files in Synapse
+Store logFC, adjusted p-values and differentially spliced junctions.
+```{r synapse.store, include = FALSE, eval=TRUE}
+activityName='Differential splicing analysis of alt-analyse PSI with mixed effects model at each differentiation states'
+
+thisFileName <- 'DiffExpAnal_splicing_mixedEffects_atEachDiffState.Rmd'
+
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName="splicing")
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+
+# Create folder to store the results and populate analysis wiki
+CODE <- Folder(name = 'Differential Splicing Analysis Mixed Effects EachDiffState', parentId = parentId)
+CODE <- synStore(CODE)
+
+storeFilesInSynapse <- function(diffState, diffExp, psiCovariates, code) {
+  print(diffState)
+  
+  diffExp = diffExp[[diffState]]
+  psiCovariates = psiCovariates[[diffState]]
+  
+  # Store logFC
+  write.table(diffExp$FC, file= paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_logFC.tsv'),
+              sep='\t',row.names=F,quote=F)
+
+  fc.obj <- File(paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_logFC.tsv'),
+                 name = paste(diffState,'logFC'), 
+                 parentId = code$properties$id)
+  synSetAnnotations(fc.obj) <- list(dataType="splicing", 
+                                    fileType="foldChangeMatrix", 
+                                    Diffname_short=diffState)
+  
+  fc.obj <- synStore(fc.obj, used = psiCovariates$ALL_USED_IDs, activityName = activityName, executed=thisFile)
+
+  # Store adjusted pvalue
+  write.table(diffExp$PVAL,file=paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_adjPval.tsv'),
+              sep='\t', row.names=F, quote=F)
+
+  pval.obj <- File(paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_adjPval.tsv'),
+                   name = paste(diffState,'Adjusted Pvalue'), parentId = CODE$properties$id)
+  synSetAnnotations(pval.obj) <- list(dataType="splicing",
+                                      fileType="pvalueMatrix", 
+                                      Diffname_short=diffState)
+  pval.obj <- synStore(pval.obj, used = psiCovariates$ALL_USED_IDs, activityName = activityName, executed=thisFile)
+
+  # Store differentially spliced junctions for comparison
+  write.table(diffExp$SIG.SETS, file=paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_diffGenes.tsv'),
+              sep='\t', row.names=F, quote=F)
+
+  sig.sets.obj <- File(paste0('./DiffExpAnal_splicing_mixedEffects_',diffState,'_diffGenes.tsv'),
+                       name = paste(diffState,'Differentially spliced junctions comparison list'),
+                       parentId = CODE$properties$id)
+  
+  synSetAnnotations(sig.sets.obj) <- list(dataType="splicing", 
+                                          fileType="differentialSplicingJunctionList", 
+                                          Diffname_short=diffState,
+                                          q = 0.05, logFC = 0)
+  sig.sets.obj <- synStore(sig.sets.obj, 
+                           used = psiCovariates$ALL_USED_IDs, 
+                           activityName = activityName, 
+                           executed=thisFile)
+  
+  return(list(FC = fc.obj$properties$id, PVAL = pval.obj$properties$id, SIG.SETS = sig.sets.obj$properties$id))
+}
+
+STORED.FILES = sapply(DIFF.STATE, storeFilesInSynapse, 
+                      DIFF.EXP, PSI.COVARIATES,CODE)
+```
+Related results can be found here
+```{r results.files}
+kable(STORED.FILES)
+```  
+### Executed: Source code
+  `r paste0('[Source R Markdown](',print(thisFile),')')`

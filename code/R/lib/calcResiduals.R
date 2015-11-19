@@ -8,13 +8,13 @@ calcResiduals <- function(geneBySampleValues, samplesByCovariates, factorCovaria
   }    
   samplesByCovariates = as.matrix(samplesByCovariates)
   
-  ##############################################################################
-  #### If sampleWeights are given as matrix use calcResiduals in a for loop ####
-  ##############################################################################
+  ##########################################################################################################################################################
+  #### If sampleWeights are given as matrix use calcResiduals in a for loop (this is done because lm function take wt as only vector and not as matrix) ####
+  ##########################################################################################################################################################
   if (is.matrix(sampleWeights)) {
     residualizedMat = matrix(NA, nrow=nrow(geneBySampleValues), ncol=ncol(geneBySampleValues), dimnames=dimnames(geneBySampleValues))
     for (gInd in 1:nrow(geneBySampleValues)) {
-      gRow = calcResiduals(geneBySampleValues[gInd, , drop=FALSE], samplesByCovariates, varsToAddBackIn, sampleWeights[gInd, ])
+      gRow = calcResiduals(geneBySampleValues[gInd, , drop=FALSE], samplesByCovariates, factorCovariates = NULL, varsToAddBackIn = varsToAddBackIn, sampleWeights = sampleWeights[gInd, ])
       residualizedMat[gInd, ] = gRow
     }
     return(residualizedMat)
@@ -26,9 +26,10 @@ calcResiduals <- function(geneBySampleValues, samplesByCovariates, factorCovaria
   
   # Formula of "y ~ 0 + x" means no intercept:
   result.lm = lm(t(geneBySampleValues) ~ 0 + samplesByCovariates, weights=sampleWeights)
-  covarNames = colnames(samplesByCovariates)
-  
   coef = result.lm$coefficients
+  
+  # Assign covariate names to coefficients matrix
+  covarNames = colnames(samplesByCovariates)
   isMatrixForm = is.matrix(coef)
   if (isMatrixForm) {
     rownames(coef) = covarNames
@@ -37,12 +38,14 @@ calcResiduals <- function(geneBySampleValues, samplesByCovariates, factorCovaria
     names(coef) = covarNames
   }
   
+  # Get variables to add back in
   allVarsToAddBack = '(Intercept)'
   if (!is.null(varsToAddBackIn)) {
     allVarsToAddBack = c(allVarsToAddBack, varsToAddBackIn)
   }
   allVarsToAddBack = intersect(allVarsToAddBack, covarNames)
   
+  # Add variables back to the residuals
   residualizedMat = result.lm$residuals
   for (v in allVarsToAddBack) {
     if (isMatrixForm) {

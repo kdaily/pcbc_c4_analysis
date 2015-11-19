@@ -1,0 +1,479 @@
+---
+title: "Coexpression Network Analysis for minfi curated methylation data (unsigned)"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library(synapseClient)
+library(data.table)
+library(dplyr)
+library(knitr)
+library(stringr)
+library(RColorBrewer)
+library(ggplot2)
+library(gplots)
+library(limma)
+library(edgeR)
+library(ctv)
+library(psych)
+library(reshape2)
+library(vcd)
+library(erer)
+library(fpc)
+library(WGCNA)
+library(Rclusterpp)
+library(circlize)
+library(knit2synapse)
+library(vbsr)
+
+## Needs the dev branch
+library(rGithubClient)
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+# source('/mnt/Github/knit2synapse-1/R/knitFile2SynapseFolder.R')
+# knitToFolderEntity(file = "./CoexppNet_methyl_TechCovar.Rmd", 
+#                    entityName = 'Coexpression Network Analysis methyl All Technical Covariates Model Unsigned', 
+#                    parentId = 'syn4231339', 
+#                    overwrite=F)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R")
+file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = FALSE)
+```
+### Download data
+```{r setup, include=FALSE}
+# Input Parameters
+EXP_ID = 'syn2233188'
+METADATA_ID = 'syn3156828'
+
+parentId = 'syn4231339'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c("Diffname_short", "BeadChip", "Row", "Column", "Cell_Line_Type", 
+                     "Tissue_of_Origin", "Reprogramming_Gene_Combination", "Culture_Conditions",  
+                     "Other_Conditions_During_Reprogramming", "Donor_Life_Stage", "Gender", 
+                     "Originating_Lab", "Donor_ID", "Cell_Type_of_Origin_Level2",
+                     "Reprogramming_Vector_Type" )
+ContCovariates = c("PassageAtThaw", "PassageAtDNAHarvest")
+```
+Obtain count matrix and metadata from synapse
+```{r getdata, cache=TRUE, include=FALSE}
+# Get count matrix
+EXP_OBJ = synGet(EXP_ID)
+ALL_USED_IDs = EXP_OBJ$properties$id
+EXP = fread(getFileLocation(EXP_OBJ), data.table = F)
+row.names(EXP) = EXP[,1]
+EXP = dplyr::select(EXP,-(ProbeID))
+
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '), loadResult=F)
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = METADATA_OBJ@schema
+METADATA = fread(METADATA_OBJ@filePath, data.table=F)
+```
+Synapse id of count matrix used for the analysis is `r paste(EXP_ID, EXP_OBJ$properties$versionNumber,sep='.')` and the synapse id of meta data table used for the analysis is `r METADATA_ID` 
+
+Factor covariates considered for analysis are `r paste(gsub('_','\\\\_',FactorCovariates),collapse=',')`, and continuous covariates considered for the analysis are `r paste(gsub('_','\\\\_',ContCovariates),collapse=',')`
+
+Preprocess counts matrix and metadata
+```{r preprocessing, include=FALSE}
+# Preprocess metadata
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Preprocess data
+* Remove samples with no Diffname short
+* Remove somatic samples and samples with no Cell Type
+* Remove samples with abnornal or no C4 Karyotype Result
+```{r filtering, echo=TRUE}
+#### Pre processing mRNA expression counts and metadata ####
+metadata_filtered <- 
+  METADATA %>%
+  filter(Diffname_short != "") %>%
+  filter(UID != "H9P50") %>%
+  filter(UID %in% colnames(EXP)) %>%
+  filter(Cell_Type == "PSC") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+
+REMOVED_UID <- setdiff(colnames(EXP), metadata_filtered$UID)
+METADATA <- METADATA[metadata_filtered$UID,]
+EXP <- EXP[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed:
+
+`r paste(gsub('_','\\\\_',REMOVED_UID),collapse=',')` 
+
+### Covariate clustering
+Determine relationship between covariates
+```{r covariates.clustering}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+```
+### Probe filtering
+Retain probes with beta greater than 0.5 in atleast one sample and less than 0.5 in atleast one other sample
+```{r gene.filtering, cache=TRUE, fig.width=8, fig.height=8, echo=TRUE}
+exp.variance <- apply(as.matrix(EXP),1,var)
+ind.remove1 <- exp.variance < sort(exp.variance)[round(0.25*length(exp.variance))]
+ind.remove2 <- (rowSums(EXP <= 0.25)/dim(EXP)[2] == 1) | (rowSums(EXP >= 0.75)/dim(EXP)[2] == 1)
+
+EXP <- EXP[!ind.remove1 & !ind.remove2,]
+```
+`r dim(EXP)[1]` number of probes and `r dim(EXP)[2]` number of samples are considered for the analysis
+
+### Clustering samples
+Clustering of initial data (with NULL design)
+```{r decompse.normalise.data, cache=TRUE, fig.height=8, fig.width=8}
+# Find principal components of expression to plot
+PC <- prcomp(EXP)
+
+# Plot first 2 PCs
+plotdata <- data.frame(UID=rownames(PC$rotation), 
+                       PC1=PC$rotation[,1], 
+                       PC2=PC$rotation[,2])
+
+plotdata <- merge(plotdata, METADATA, by="UID")
+plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+p <- p + geom_point(aes(color = Cell_Line_Type, shape=Diffname_short, size=Gender))
+p <- p + theme_bw() + scale_size_manual(values = c(5, 2)) + scale_shape_manual(values = 1:7) + theme(legend.position="top") 
+p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+p
+```
+### Normalisation (with technical covariates only)
+Initial normalisation usign voom (residualised technical covariates with donor id as random variable)
+```{r technical.voom.normalisation, fig.height=14, fig.width=20}
+postAdjustCovars = c('Diffname_short', 'Gender', 'Culture_Conditions', 'BeadChip', 'Row', 'Donor_Life_Stage')
+  
+# Post adjusted design matrix
+DM1 = getDesignMatrix(COVARIATES[,postAdjustCovars,drop=F],Intercept = F)
+DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
+    
+# Estimate correlation of random effects
+correlation <- duplicateCorrelation(EXP, design=DM1$design, block=COVARIATES$Donor_ID)
+  
+# Fit linear model
+FIT = lmFit(EXP, design=DM1$design, block=COVARIATES$Donor_ID, correlation = correlation$cor)
+  
+# Residuals after normalisation
+EXPR = residuals.MArrayLM(FIT,EXP)
+varsToAddBackIn = c("Diffname_shortDE", "Diffname_shortEB", "Diffname_shortECTO", "Diffname_shortMESO5", "Diffname_shortSC", "Genderfemale", "Culture_ConditionsCreexcised", "Culture_ConditionsDMEMF12KOSR01mMBME01mMNEAA01mMLgluatime20ngmlbFGF", "Culture_ConditionsE8", "Culture_ConditionsFeederandKOSRcultureconditions", "Culture_ConditionsStandardTESR1MatrigelorKOSRMEFs", "Culture_ConditionsStromalnonprimed", "Culture_ConditionsStromalprimed", "Culture_ConditionsiPSCsweregeneratedandintiallymaintainedusingMEFKSRculturesAftertransfertoWiCelliPSCsexpandedinFeederIndependentTeSR1Medium", "Donor_Life_Stageadult", "Donor_Life_Stageblastocyst", "Donor_Life_Stageembryo", "Donor_Life_Stagefetal")
+EXPR = EXPR + (FIT$coefficients[,varsToAddBackIn] %*% t(DM1$design[,varsToAddBackIn]))
+
+# Design matrix with all covariates
+DESIGN = getDesignMatrix(COVARIATES, Intercept = F)
+DESIGN = DESIGN$design[,linColumnFinder(DESIGN$design)$indepCols]
+colnames(DESIGN) = str_sub(colnames(DESIGN), 1, 30)
+
+# Correlation between covariates and expression residuals
+residualCovaraitesCorrelation = runPCAandPlotCorrelations(EXPR, DESIGN, dataName = 'residual covariates relation')
+print(residualCovaraitesCorrelation$PC_res[[2]])
+```
+Sample clustering to check for outliers
+```{r sample.clustering, fig.height=15, fig.width=20}
+sampleTrees = flashClust::hclust(dist(t(EXPR)), method = "average")
+tree = cutreeStatic(sampleTrees, cutHeight = 200, minSize=3)
+
+plotDendroAndColors(sampleTrees, 
+                    labels2colors(cbind(tree,COVARIATES)),
+                    groupLabels = c('Cluster',colnames(COVARIATES)))
+collectGarbage()
+```
+Sample pca to check for outliers
+```{r residual.clustering, fig.height=10, fig.width=10}
+# Find principal components of expression to plot
+PC <- prcomp(EXPR)
+
+# Determine number of clusters automatically using pamk
+pam.cluster <- pamk(t(EXPR), krange=2:10)
+
+# Plot first 2 PCs
+plotdata <- data.frame(UID=rownames(PC$rotation), 
+                       PC1=PC$rotation[,1], 
+                       PC2=PC$rotation[,2], 
+                       cluster=pam.cluster$pamobject$clustering)
+
+plotdata <- merge(plotdata, rownameToFirstColumn(COVARIATES, "UID"), by="UID")
+plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+p <- p + geom_point(aes(color=factor(cluster), shape=Diffname_short, size=Gender))
+p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values=1:7) + theme(legend.position="top") 
+p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+p
+```
+### Coexpression networks
+```{r wgcna.power, fig.height=8, fig.width=8}
+# Allow multi-threading within WGCNA. 
+# Caution: skip this line if you run RStudio or other third-party R environments.
+enableWGCNAThreads()
+
+# Choose a set of soft-thresholding powers
+powers = c(seq(2,10,by=1), seq(12,30, by=2));
+
+# Call the network topology analysis function
+EXPR = t(EXPR)
+powerTables = pickSoftThreshold(EXPR, 
+                                powerVector=powers,
+                                corFnc = 'bicor',
+                                networkType = 'unsigned',
+                                blockSize = 10000,
+                                verbose = 2)[[2]]
+collectGarbage();
+
+# Plot the results
+colors = c("black", "red")
+
+# Will plot these columns of the returned scale free analysis tables
+plotCols = c(2,5,6,7)
+colNames = c("Scale Free Topology Model Fit", "Mean connectivity", "Median connectivity", "Max connectivity");
+
+# Plot the quantities in the chosen columns vs. the soft thresholding power
+p <- list()
+for (i in 1:length(plotCols)){
+  name = colnames(powerTables)[plotCols[i]]
+  p[[name]] <- ggplot(powerTables, aes_string(x = 'Power', y = name)) + geom_point()
+  p[[name]] <- p[[name]] + geom_text(aes(label= Power), size=4, hjust=1, vjust = -1)
+  p[[name]] <- p[[name]] + ggtitle(colNames[i])
+}
+
+multiplot(plotlist=p, cols=2)
+softPower = 7
+collectGarbage()
+save(list=c('powerTables'), file = 'CoexppNet_methyl_technicalCovariates_unsigned.RData')
+```
+Beta is chosen to be `r softPower`
+```{r wgcna.adj, fig.width=15, fig.height=10}
+# We set the minimum module size relatively high
+minModuleSize = 30;
+
+# Get blockwise modules 
+MOD = blockwiseModules(EXPR,
+                       maxBlocksize = 10000,
+                       corType = "bicor",
+                       power = softPower,
+                       networkType = "unsigned",
+                       deepSplit = 3,
+                       minModuleSize = minModuleSize,
+                       reassignThershold = 1e-20,
+                       verbose = 4)
+collectGarbage()
+
+# Module identification using dynamic tree cut
+unmergedNetModules.colors = MOD$colors
+collectGarbage()
+
+save(list=c('powerTables', 'MOD', 'unmergedNetModules.colors'), 
+     file = 'CoexppNet_methyl_technicalCovariates_unsigned.RData')
+```
+Dendrogram tree of gene clustering
+```{r dendro.modules, fig.height=12, fig.width=20}
+for (i in 1:length(MOD$blockGenes)){
+  plotDendroAndColors(MOD$dendrograms[[i]], unmergedNetModules.colors[MOD$blockGenes[[i]]], 
+                      "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  }
+```
+### Module analysis
+```{r module.analysis, fig.height=5, fig.width=10}
+# Merge modules with similar expression profiles
+# Calculate module eigengenes
+unmergedMEs = moduleEigengenes(EXPR, 
+                               colors = unmergedNetModules.colors,
+                               nPC = 10)
+
+# Calculate dissimilarity between module eigen genes
+MEDiss = 1 - abs(cor(unmergedMEs$eigengenes, use = "p"))
+
+# Cluster module eigen genes
+METree = hclust(as.dist(MEDiss), method = "average");
+collectGarbage()
+
+# Plot the results
+par(mfrow = c(1,1))
+plot(METree, main = "Clustering of module eigengenes",
+     xlab = "", sub = "")
+abline(h=0.15, col = "red")
+
+# Merge modules
+merge = mergeCloseModules(fixDataStructure(EXPR), unmergedNetModules.colors, cutHeight = 0.15, verbose = 3)
+
+# Numeric module labels
+mergedNetModules = merge$colors
+
+# Convert labels to colors
+mergedNetModules.colors = labels2colors(mergedNetModules)
+mergedNetModules.colors = matchLabels(unmergedNetModules.colors, mergedNetModules.colors)
+
+# Eigengenes of the new merged modules:
+mergedMEs = merge$newMEs
+MEs = orderMEs(mergedMEs[[1]]$data)
+
+tmp = corr.test(MEs)
+tmp1 = tmp$r
+tmp1[tmp$pval >= 0.05] = 0
+tmp1 = melt(tmp1)
+
+# Plot correlation between eigen genes
+writeLines('Correlation between eigen genes')
+p = ggplot(tmp1, aes(x=X1,y=X2)) + geom_tile(aes(fill = value), colour = "white") + 
+  scale_fill_gradient2(low = "green", high = "red", limits = c(-1,1))
+p = p + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+p
+
+# Plot dendrogram and module colors
+writeLines('Module dendrogram and color assignment')
+for (i in 1:length(MOD$dendrograms)){
+  plotDendroAndColors(MOD$dendrograms[[i]],
+                      cbind(unmergedNetModules.colors[MOD$blocks == i], mergedNetModules.colors[MOD$blocks == i]),
+                      c("Unmerged", "Merged"),
+                      dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  }
+save(list=c('powerTables', 'MOD', 'unmergedNetModules.colors',
+            'mergedNetModules.colors', 'mergedMEs'), 
+     file = 'CoexppNet_methyl_technicalCovariates_unsigned.RData')
+```
+### Compare eigen genes and covariates
+```{r compare.covars, fig.height=10, fig.width=15}
+# Set up variables to contain the module-trait correlations
+DESIGN = getDesignMatrix(COVARIATES[,FactorCovariates], Intercept = F)$design
+DESIGN[is.na(DESIGN)] = 0
+
+DESIGN.SPLIT = lapply(FactorCovariates, function(x, DESIGN){ ind = grep(x, colnames(DESIGN)); return(DESIGN[,ind])}, DESIGN)
+names(DESIGN.SPLIT) = FactorCovariates
+
+# Also obtain comparisons
+ALL.COMP = mapply(function(x, y){
+  CONT.NAMES <- colnames(x)
+  CONT.NAMES <- combn(CONT.NAMES,2)
+  CONT.NAMES <- apply(CONT.NAMES,2,paste,collapse='-')
+  
+  CONT <- makeContrasts(contrasts=CONT.NAMES,levels=colnames(x))
+  colnames(CONT) = gsub(y,'',colnames(CONT))
+  
+  ALL.CONT = x %*% CONT
+  
+  colnames(x) = gsub(y, '', colnames(x))
+  
+  return(ALL.CONT)
+  }, DESIGN.SPLIT, FactorCovariates)
+ALL.COMP = do.call(cbind, ALL.COMP)
+ALL.COMP = ALL.COMP[,!duplicated(colnames(ALL.COMP))]
+```
+Correlation between module eigen genes and molecular traits
+```{r calculate.corr, fig.height=15, fig.width=10}
+# Calculate the correlations
+g = corr.test(mergedMEs[[1]]$data, ALL.COMP, adjust = 'bonferroni')
+
+moduleTraitCor = g$r
+moduleTraitPvalue = g$p
+moduleTraitCor[moduleTraitPvalue > 0.05] = 0
+
+moduleTraitCor = moduleTraitCor[, colSums(moduleTraitCor) != 0]
+colnames(moduleTraitCor) = str_sub(colnames(moduleTraitCor),1,25)
+
+tmp = reshape2::melt(moduleTraitCor)
+setnames(tmp, c('X1','X2'), c('MEs','Trait'))
+p = ggplot(tmp, aes(x=MEs,y=Trait)) + geom_tile(aes(fill = value), colour = "white") + 
+  scale_fill_gradient2(low = "green", high = "red", limits = c(-1,1))
+p = p + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+p
+
+# Heatmap(moduleTraitCor, 
+#         column_title = 'Covariates', 
+#         row_title = 'Module Eigengene', 
+#         name = 'Correlation',
+#         col = colorRamp2(c(-1,0,1), c("green", "white", "red")))
+
+save(list=c('powerTables', 'MOD', 'unmergedNetModules.colors',
+            'mergedNetModules.colors', 'mergedMEs','g','ALL.COMP'), 
+     file = 'CoexppNet_methyl_technicalCovariates_unsigned.RData')
+```
+vbsr between MEs and traits
+```{r vbsr, fig.height=15, fig.width=10}
+associationStats = sapply(MEs, function(x, ALL.COMP){
+  tmp = vbsr(x,ALL.COMP)$z
+  names(tmp) = colnames(ALL.COMP)
+  return(tmp)
+}, ALL.COMP)
+rownames(associationStats) = str_sub(rownames(associationStats), 1, 25)
+
+associationStats = associationStats[rowSums(abs(associationStats) >= 5) != 0,colSums(abs(associationStats) >= 5) != 0]
+
+tmp = reshape2::melt(associationStats)
+setnames(tmp, c('X1','X2','value'), c('Trait', 'MEs','Zscores'))
+p = ggplot(tmp, aes(x=MEs,y=Trait)) + geom_tile(aes(fill = Zscores), colour = "white") + 
+  scale_fill_gradient2(low = "green", high = "red", limits = c(-70,70))
+p = p + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+p
+
+save(list=c('powerTables', 'MOD', 'unmergedNetModules.colors',
+            'mergedNetModules.colors', 'mergedMEs','g','ALL.COMP','associationStats'), 
+     file = 'CoexppNet_methyl_technicalCovariates_unsigned.RData')
+```
+
+### Synapse Store
+```{r synapse.store, cache=FALSE, include=FALSE}
+parentId = 'syn3256504'
+
+activityName='Coexpression Network Analysis of methyl data with technical covariates model'
+  
+thisFileName <- 'CoexppNet_methyl_TechCovar.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='methylNet')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Create folder to tore the results and populate analysis wiki
+CODE <- Folder(name = 'Coexpression Network Analysis methyl All Technical Covariates Model Unsigned',parentId = parentId)
+CODE <- synStore(CODE)
+      
+# Store Results
+COEXPP_OBJ <- File('./CoexppNet_methyl_technicalCovariates_unsigned.RData', name = 'Coexpression Networks', parentId = CODE$properties$id)
+COEXPP_OBJ <- synStore(COEXPP_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+
+# Store Results
+MOD = data.frame(GeneNames = colnames(EXPR) , merged = mergedNetModules.colors, unmerged = unmergedNetModules.colors)
+write.table(MOD, file='modules.tsv', sep='\t', quote=F, row.names=F)
+MOD_OBJ <- File('modules.tsv', name = 'Coexpression Network Modules', parentId = CODE$properties$id)
+MOD_OBJ <- synStore(MOD_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+```
+### Source Code
+[Source R Markdown](`r thisFile`)

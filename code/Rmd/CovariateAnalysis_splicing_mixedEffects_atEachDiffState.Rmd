@@ -1,0 +1,502 @@
+---
+title: "Covariate analysis for splicing data from alt-analyse pipeline with mixed effect modeling performed at indivudal differentiation stages"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE, cache=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('limma')
+library('psych')
+library('reshape2')
+library('data.table')
+library('plyr')
+library('dplyr')
+
+library('RColorBrewer')
+library('ggplot2')
+
+library('synapseClient')
+library('knitr')
+library('stringr')
+library('rGithubClient') ## Needs the dev branch
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+# knit2synapse::knitToFolderEntity(file = "./CovariateAnalysis_splicing_mixedEffects_atEachDiffState.Rmd", 
+#                                  entityName = 'Covariate Analysis Splicing Mixed Effects EachDiffState', 
+#                                  parentId = 'syn4991628', 
+#                                  overwrite=F, knitmd = TRUE)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+# These should be moved to a package - very fragile way to do this!
+file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
+tmp = sapply(file.sources, source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Download data
+```{r setup, include=TRUE}
+# Input Parameters
+PSI_ID = 'syn4991632'
+METADATA_ID = 'syn3156503'
+
+SYNAPSE_STORE = T
+parentId = 'syn4991628'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c('Diffname_short', 'run', 'Cell_Line_Type', 'Cell_Line_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Gene_Combination', 'Culture_Conditions', 'Donor_Life_Stage', 'Gender', 'Originating_Lab', 'Donor_ID', 'Cell_Type_of_Origin_Level2', 'Reprogramming_Vector_Type')
+ContCovariates = c('PassageAtThaw', 'PassageAtHarvest')
+```
+The alt-analyse derived processed PSI matrix used: (`r PROC.PSI_ID`). 
+
+The metadata comes from the table `r METADATA_ID`. 
+
+Factor covariates considered for analysis are:
+  
+```{r factorcov}
+paste(gsub('_','\\\\_',FactorCovariates),collapse=', ')
+```
+
+The continuous covariates considered for the analysis are:
+  
+```{r contcov}
+paste(gsub('_','\\\\_',ContCovariates),collapse=', ')
+```
+```{r getdata, cache=FALSE, include=TRUE}
+# Get PSI matrix
+PSI_OBJ = synGet(PSI_ID)
+ALL_USED_IDs = PSI_OBJ$properties$id
+PSI = fread(getFileLocation(PSI_OBJ), data.table=FALSE)
+row.names(PSI) = PSI$"Minor-Isoform"
+```
+```{r getmetadata, cache=FALSE, include=TRUE}
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '))
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = METADATA_OBJ@schema
+METADATA = METADATA_OBJ@values
+METADATA[METADATA == 'N/A'] = NA
+```
+Preprocess PSI matrix and metadata.
+```{r preprocessing, include=FALSE}
+# Seperate PSI and PSI annotation
+PSI.ANNOT = dplyr::select(PSI,  one_of(c("Symbol", "Description", "Minor-Isoform", "Major Isoform", "AltExons", "PME",
+                                        "dPSI", "rho", "Max Inclusion PSI", "Coordinates", "feature")))
+PSI = PSI[, setdiff(colnames(PSI), colnames(PSI.ANNOT))]
+colnames(PSI) = gsub('.bed', '', colnames(PSI))
+
+# Preprocess metadata
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName,
+                     -public, -pass_qc, -exclude) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Preprocess data
+* Remove somatic samples and samples with not type.
+* Remove samples that failed QC and samples classified as exclude.
+* Remove samples with abnormal karyotypes.
+* Remove private samples (if any)
+```{r filtering, echo=TRUE}
+#### Pre processing PSI and metadata ####
+metadata_keep <- METADATA %>% 
+  filter(UID %in% colnames(PSI))
+
+metadata_filtered <- metadata_keep %>%
+  filter(public, pass_qc, !exclude,
+         Diffname_short != "",
+         Cell_Type == "PSC",
+         C4_Karyotype_Result != "abnormal")
+
+REMOVED_UID <- setdiff(metadata_keep$UID, metadata_filtered$UID)
+METADATA <- metadata_filtered
+rownames(METADATA) <- metadata_filtered$UID
+PSI <- PSI[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed:
+
+`r paste(gsub('_','\\\\_',REMOVED_UID), collapse= ',')` 
+
+### Covariate clustering
+```{r data.split}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+
+# Split covariates by diffname short
+COVARIATES = split(COVARIATES,COVARIATES$Diffname_short)
+```
+
+Covariate correlation
+```{r covariates.correlation, fig.width=10, fig.height=10}
+covariateCorrelation <- function(covariates){  
+  Diffname = unique(covariates$Diffname_short)
+  cat("----\n", 
+      paste('#### Differentiation state:',as.character(Diffname)),
+      sep="")
+  
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Correlation between covariates
+  covariates.correlation = getAssociationStatistics(covariates, PVAL = 0.1)  
+  ggheatmap.show(covariates.correlation$plot, col.width=0.3, row.width=0.15)
+  
+  return(list(COVARIATES.CORRELATION = covariates.correlation))
+}
+
+COVARIATES.CORRELATION = lapply(COVARIATES, covariateCorrelation)
+```
+
+### Filter junctions and get design matrix
+Total number of junctions and samples used for the analysis are
+```{r filter.jn, cache=FALSE}
+filterJNandGetDesignMat <- function(covariates, psi){
+  
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("----\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Filter junctions
+  psi = psi[,rownames(covariates)]
+  retainedJunctions = rownames(psi)[rowSums(is.na(psi))/ dim(psi)[2] <= 0.8]
+  psi = psi[retainedJunctions,]
+  
+  psi = psi[(apply(psi, 1, var, na.rm = T) >= 0.001),]
+
+  # Initial design matrix with covariates under consideration  
+  dm = getDesignMatrix(covariates, Intercept = F)
+  
+  return(list(PSI = psi,
+              COVARIATES = covariates,
+              DM = dm))
+}
+PSI.PREADJUSTED = lapply(COVARIATES, filterJNandGetDesignMat, PSI)
+
+tmp = sapply(PSI.PREADJUSTED, function(x){dim(x$PSI)})
+rownames(tmp) = c('# Junctions', '# samples')
+kable(tmp)
+```
+
+Clustering of initial PSI matrix (with NULL design)
+```{r decompse.normalise.data, fig.height=8, fig.width=8}
+plotPCApsi <- function(covariates, psi){ 
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Find principal components of expression to plot
+  psi.tmp = psi[[diffstate]]$PSI
+  psi.tmp[is.na(psi.tmp)] = runif(sum(is.na(psi.tmp))) * 1e-100
+  PC <- prcomp(psi.tmp, scale = T)
+  
+  # Plot first 2 PCs
+  plotdata <- data.frame(UID=rownames(PC$rotation), 
+                         PC1=PC$rotation[,1], 
+                         PC2=PC$rotation[,2])
+  
+  plotdata <- merge(plotdata, rownameToFirstColumn(covariates, 'UID'), by="UID")
+  plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+  
+  p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+  p <- p + geom_point(aes(color=Cell_Line_Type, 
+                          shape=Reprogramming_Vector_Type, 
+                          size=Gender))
+  p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) 
+  p <- p + scale_shape_manual(values=1:length(unique(covariates$Reprogramming_Vector_Type)))
+  p <- p + theme(legend.position="top") 
+  p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+  print(p)
+  
+  return(list(p = p))
+}
+PCA.PSI = lapply(COVARIATES, plotPCApsi, PSI.PREADJUSTED)
+```
+
+### Significant Covariates
+Correlation between pca of unadjusted PSI and covariates is used to find significant covariates
+```{r preAdjusted.covariates, fig.width=25, fig.height=12, cache=FALSE}
+plotPSICovariatesCorrelation <- function(covariates, psi.preadjusted){
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]
+  
+  # Find correlation between PC's of psi with covariates
+  dm = getDesignMat2Fact(psi.preadjusted[[diffstate]]$DM$design,
+                         FactorCovariates)
+  
+  colnames(dm) = substr(colnames(dm),1,50)
+  
+  psi.tmp = psi.preadjusted[[diffstate]]$PSI
+  psi.tmp[is.na(psi.tmp) | (psi.tmp == 0)] = runif(sum(is.na(psi.tmp)  | (psi.tmp == 0))) * 1e-100
+  preAdjustedSigCovars = runPCAandPlotCorrelations(data.matrix(psi.tmp), data.matrix(dm),
+                                                   'NULL design', 
+                                                   isKeyPlot=TRUE)
+  
+  # Plot preAdjustedSigCovars
+  print(preAdjustedSigCovars[["PC_res"]][[2]]$plotData)  
+  
+  # Find significant covariates
+  tmpDm <- psi.preadjusted[[diffstate]]$DM
+  adjustCovars = designMatVarsToCovars(getCovariatesMap(tmpDm),
+                                       preAdjustedSigCovars$significantCovars)
+    
+  cat("----\n",
+      paste('Significant covariates to adjust at FDR 0.1 are:\n',
+            paste(gsub('_','\\\\_',adjustCovars), collapse= ', ')),
+      sep="")
+  writeLines('')
+  
+  return(list(adjustCovars = adjustCovars,
+              preAdjustedSigCovars = preAdjustedSigCovars))  
+}
+PREADJUSTED.COVARIATES = lapply(COVARIATES, plotPSICovariatesCorrelation,
+                                PSI.PREADJUSTED)
+```
+
+### Normalisation (iterative)
+Since many covariates are correlated, re-normalising COVARIATES with an iterative design matrix. All effects are considered as fixed effects, except Donor_ID which is a random effect.
+```{r iterative.adjusted.normalisation, fig.width=25, fig.height=12, cache=FALSE}
+iterativeNormalisation <- function(covariates, psiPreadjusted,
+                                   preadjustedCovariates) {  
+  diffstate = unique(covariates$Diffname_short)
+  
+  cat("---\n",
+      paste0('#### Differentiation state: ',as.character(diffstate), "\n"),
+      sep="")
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
+  
+  # Assign return values
+  FIT = c()
+  CORRELATION = c()
+  RESIDUAL.PSI = c()  
+  postAdjustCovars = c()
+  PSI = c()
+  
+  # Covariate to levels mapping
+  covariateMapping <- getCovariatesMap(psi.preadjusted[[diffstate]]$DM)
+  
+  # Assign residual covariates
+  residualSigCovars = preadjustedCovariates[[diffstate]]$preAdjustedSigCovars
+  
+  significantCovars = designMatVarsToCovars(covariateMapping,
+                                            residualSigCovars$significantCovars)
+  
+  covariatesEffects = designMat2CovEffects(covariateMapping,
+                                           residualSigCovars$Effects.significantCovars)
+  
+  covariatesEffects = covariatesEffects[setdiff(significantCovars, c(postAdjustCovars,'Donor_ID'))]
+  
+  postAdjustCovars = names(which.max(covariatesEffects))
+  
+  DESIGN = dplyr::select(as.data.frame(psiPreadjusted[[diffstate]]$DM$design),-starts_with('Donor_ID'))
+  colnames(DESIGN) = substr(colnames(DESIGN),1,50)
+  
+  loopCount = 0 
+  while(length(residualSigCovars$significantCovars)!=0 && loopCount <= 15){
+    writeLines(paste('Using following covariates in the model:',
+                     paste(paste(gsub('_','\\\\_',postAdjustCovars),collapse=', '),'as fixed effects'),
+                     sep=':'))
+    
+    # Post adjusted design matrix
+    DM1 = getDesignMatrix(covariates[,postAdjustCovars,drop=F],Intercept = F)
+    DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
+    
+    # Estimate correlation between donor effects
+    CORRELATION = duplicateCorrelation(psiPreadjusted[[diffstate]]$PSI, 
+                                       design = DM1$design,
+                                       block = covariates$Donor_ID)
+    
+    if(abs(CORRELATION$cor) == 1 || abs(CORRELATION$cor) == 0){
+      writeLines('Random effects correlation cannot be estimated')
+      break
+    }
+        
+    # Fit linear model with chosen design
+    FIT = lmFit(psiPreadjusted[[diffstate]]$PSI,
+                block = covariates$Donor_ID,
+                correlation = CORRELATION$consensus.cor)
+    
+    # Residuals after normalisation
+    RESIDUAL.PSI= residuals.MArrayLM(FIT, psiPreadjusted[[diffstate]]$PSI)
+    
+    # Residual covariates to choose from
+    residCovars <- setdiff(c(FactorCovariates,ContCovariates), postAdjustCovars)
+    
+    # Find PC of residual gene expression and significant covariates that are highly correlated with PCs    
+    RESIDUAL.PSI.tmp = RESIDUAL.PSI;
+    RESIDUAL.PSI.tmp[is.na(RESIDUAL.PSI.tmp)] = runif(sum(is.na(RESIDUAL.PSI.tmp))) * 1e-100
+    residualSigCovars = runPCAandPlotCorrelations(RESIDUAL.PSI.tmp, 
+                                                  DESIGN,
+                                                  'residuals',
+                                                  isKeyPlot=TRUE)
+    
+    # Add postadjusted covariates (if any)
+    significantCovars = designMatVarsToCovars(covariateMapping, 
+                                              residualSigCovars$significantCovars)
+    covariatesEffects = designMat2CovEffects(covariateMapping,
+                                             residualSigCovars$Effects.significantCovars)
+    covariatesEffects = covariatesEffects[setdiff(significantCovars,
+                                                  c(postAdjustCovars,'Donor_ID'))]
+    
+    postAdjustCovars = c(postAdjustCovars, names(which.max(covariatesEffects)))
+    loopCount = loopCount + 1
+  }
+  
+  writeLines('----')
+  writeLines(paste('Using following covariates in the final model:\n', 
+                   paste(paste(gsub('_','\\\\_',postAdjustCovars), collapse=', '),
+                         'as fixed effects')))
+  writeLines('')
+  
+  ### Sanity Check
+  writeLines('----')
+  print(PSI.POSTADJUSTED$residualSigCovars[["PC_res"]][[2]]$plotData)
+  writeLines('----')
+
+  return(list(PSI = psiPreadjusted[[diffstate]]$PSI,
+              FIT = FIT,
+              RESIDUAL.PSI = RESIDUAL.PSI,
+              residualSigCovars = residualSigCovars,
+              postAdjustCovars = postAdjustCovars))
+}  
+PSI.POSTADJUSTED = lapply(COVARIATES, iterativeNormalisation,
+                          PSI.PREADJUSTED, PREADJUSTED.COVARIATES)
+```
+
+### Synapse Store
+Store processed psi, covariates, design matrix, and adjusted gene expression matrices
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE, cache=FALSE}
+ActivityName <- 'Covariate Analysis of alt-anlyse PSI at each diff state with mixed effects'
+
+thisFileName <- 'CovariateAnalysis_splicing_mixedEffects_atEachDiffState.Rmd'
+
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", refName='splicing')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+
+# Populate wiki with results
+CODE <- Folder(name = 'Covariate Analysis Splicing Mixed Effects EachDiffState', 
+               parentId = parentId)
+
+CODE <- synStore(CODE)
+
+storeFilesInSynapse <- function(covariates, preadjustedPSI, postadjustedPSI, code) {
+  diffstate = as.character(unique(covariates$Diffname_short))
+  
+  # Drop unilevel covariates
+  covariates = droplevels(covariates)
+  covariates = covariates[,sapply(covariates, function(x) length(levels(x))) > 1]    
+  
+  # Store PSI matrix
+  psi <- postadjustedPSI[[diffstate]]$PSI
+  psi <- rownameToFirstColumn(psi, 'Minor-Isoform') %>% left_join(PSI.ANNOT)
+  
+  write.table(psi,
+              file = paste0('./Processed_PSI_',diffstate,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  PSI_OBJ <- File(paste0('./Processed_PSI_',diffstate,'.tsv'),
+                     name = paste('Processed PSI',diffstate),
+                     parentId = code$properties$id)
+  
+  synSetAnnotations(PSI_OBJ) <- list(dataType="splicing", fileType="genomicMatrix", 
+                                        fileSubType="psi", Diffname_short=diffstate)
+  
+  PSI_OBJ <- synStore(PSI_OBJ, 
+                      used = ALL_USED_IDs, 
+                      activityName = ActivityName, 
+                      executed = thisFile) 
+  
+  # Covariates Matrix
+  covariates <- rownameToFirstColumn(covariates, 'UID')
+  write.table(covariates,
+              file = paste0('./Adjusted_splicing_Covariates_',diffstate,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  COVARIATES_OBJ <- File(paste0('Adjusted_splicing_Covariates_',diffstate,'.tsv'),
+                         name = paste('Adjusted Covariates',diffstate),
+                         parentId = code$properties$id)
+  
+  synSetAnnotations(COVARIATES_OBJ) <- list(dataType="splicing", fileType="Covariates", fileSubType="Adjusted",
+                                            fixedEffects=postadjustedPSI[[diffstate]]$postAdjustCovars,
+                                            randomEffects="Donor_ID", Diffname_short=diffstate)
+  
+  COVARIATES_OBJ <- synStore(COVARIATES_OBJ,  used = ALL_USED_IDs, 
+                             activityName = ActivityName, executed = thisFile)
+  
+  # Design Matrix
+  DESIGN <- preadjustedPSI[[diffstate]]$DM$design
+  DESIGN <- rownameToFirstColumn(DESIGN, 'UID')
+  
+  write.table(DESIGN,
+              file = paste0('./Adjusted_splicing_Design_',diffstate,'.tsv'),
+              sep='\t', row.names=F, col.names=T, quote=F)
+  
+  DESIGN_OBJ <- File(paste0('Adjusted_splicing_Design_',diffstate,'.tsv'),
+                     name = paste('Adjusted Design',diffstate),
+                     parentId = code$properties$id)
+  
+  synSetAnnotations(DESIGN_OBJ) <- list(dataType="splicing", fileType="Design", fileSubType="Adjusted",
+                                        fixedEffects=postadjustedPSI[[diffstate]]$postAdjustCovars,
+                                        randomEffects="Donor_ID", Diffname_short=diffstate)
+  
+  DESIGN_OBJ <- synStore(DESIGN_OBJ, used = ALL_USED_IDs, activityName = ActivityName, 
+                         executed = thisFile)
+}
+
+STORED.FILES = lapply(COVARIATES, 
+                      storeFilesInSynapse, 
+                      PSI.PREADJUSTED, 
+                      PSI.POSTADJUSTED, CODE)
+```
+### Executed: Source code
+`r paste0('[Source R Markdown](',print(thisFile),')')`
