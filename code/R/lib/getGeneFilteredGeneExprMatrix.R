@@ -3,12 +3,15 @@ getGeneFilteredGeneExprMatrix <- function(genesBySamplesCounts,ONLY_USE_GENES=NU
                                           MIN_GENE_CPM=1,
                                           MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM=0.5,
                                           EDGER_NORMALIZATION.calcNormFactors.method = "none", # Choices are: "TMM", "RLE", "upperquartile", "none" [see edgeR::calcNormFactors()]
-                                          EDGER_NORMALIZATION.keep.lib.sizes = TRUE) {
+                                          EDGER_NORMALIZATION.keep.lib.sizes = TRUE,
+                                          verbose=FALSE) {
   if (!is.null(ONLY_USE_GENES)) {
     useGenes = colnames(genesBySamplesCounts)
     useGenes = useGenes[useGenes %in% ONLY_USE_GENES]
     genesBySamplesCounts = genesBySamplesCounts[, useGenes]
-    writeLines(paste("\nLimiting expression data to ", length(useGenes), " genes specified by the ONLY_USE_GENES parameter.", sep=""))
+    if (verbose) {
+      writeLines(paste("\nLimiting expression data to ", length(useGenes), " genes specified by the ONLY_USE_GENES parameter.", sep=""))
+    }
   }
   
   # Make edgeR object
@@ -23,8 +26,9 @@ getGeneFilteredGeneExprMatrix <- function(genesBySamplesCounts,ONLY_USE_GENES=NU
   MATRIX.NON_LOW_GENES = MATRIX.ALL_GENES[isNonLowExpr, ,keep.lib.sizes=EDGER_NORMALIZATION.keep.lib.sizes]
   MATRIX.NON_LOW_GENES = calcNormFactors(MATRIX.NON_LOW_GENES, method=EDGER_NORMALIZATION.calcNormFactors.method)
   
-  writeLines(paste("\nWill normalize expression counts for ", nrow(MATRIX.NON_LOW_GENES), " genes (those with a minimum of ", MIN_GENE_CPM, " CPM in at least ", sprintf("%.2f", 100 * MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM), "% of the ", ncol(MATRIX.NON_LOW_GENES), " samples).", sep=""))
-  
+  if (verbose) {
+    writeLines(paste("\nWill normalize expression counts for ", nrow(MATRIX.NON_LOW_GENES), " genes (those with a minimum of ", MIN_GENE_CPM, " CPM in at least ", sprintf("%.2f", 100 * MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM), "% of the ", ncol(MATRIX.NON_LOW_GENES), " samples).", sep=""))
+  }
   FRACTION_BIN_WIDTH = 0.02
   plotFracSamplesWithMinCPM = data.frame(GeneFeature=names(fracSamplesWithMinCPM), fracSamplesWithMinCPM=as.numeric(fracSamplesWithMinCPM))
   gRes = ggplot(plotFracSamplesWithMinCPM, aes(x=fracSamplesWithMinCPM))

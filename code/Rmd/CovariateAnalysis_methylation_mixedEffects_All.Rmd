@@ -1,0 +1,326 @@
+---
+title: "Covariate analysis of minfi curated methylation data with mixed effect modeling"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('data.table')
+library('plyr')
+library('dplyr')
+library('psych')
+
+library('RColorBrewer')
+library('ggplot2')
+
+library('limma')
+library('minfi')
+
+library('knitr')
+library('stringr')
+library('synapseClient')
+library('knit2synapse')
+library('rGithubClient') ## Needs the dev branch
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+# devtools::install_github("knit2synapse-1", username = "th1vairam", ref= "dev")
+# knitToFolderEntity(file = "./CovariateAnalysis_methylation_mixedEffects_All.Rmd", 
+#                    parentId = 'syn4231339',
+#                    entityName = 'Covariate Analysis Methylation Mixed Effects All', 
+#                    overwrite=F)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+# These should be moved to a package - very fragile way to do this!
+file.sources = list.files('../R/lib',pattern="*.R$", full.names=TRUE)
+tmp = sapply(file.sources, source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Download data
+```{r setup, include=FALSE}
+# Input Parameters
+EXP_ID = 'syn2233188'
+METADATA_ID = 'syn3156828'
+
+parentId = 'syn4231339'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c("Diffname_short", "BeadChip", "Row", "Column", "Cell_Line_Type", 
+                     "Tissue_of_Origin", "Reprogramming_Gene_Combination", "Culture_Conditions",  
+                     "Other_Conditions_During_Reprogramming", "Donor_Life_Stage", "Gender", 
+                     "Originating_Lab", "Donor_ID", "Cell_Type_of_Origin_Level2",
+                     "Reprogramming_Vector_Type" )
+ContCovariates = c("PassageAtThaw", "PassageAtDNAHarvest")
+```
+Obtain count matrix and metadata from synapse
+```{r getdata, cache=TRUE, include=FALSE}
+# Get count matrix
+EXP_OBJ = synGet(EXP_ID)
+ALL_USED_IDs = EXP_OBJ$properties$id
+EXP = fread(getFileLocation(EXP_OBJ), data.table = F)
+row.names(EXP) = EXP[,1]
+EXP = dplyr::select(EXP,-(ProbeID))
+
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '), loadResult=F)
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = METADATA_OBJ@schema
+METADATA = fread(METADATA_OBJ@filePath, data.table=F, header=T)
+```
+Synapse id of count matrix used for the analysis is `r paste(EXP_ID, EXP_OBJ$properties$versionNumber,sep='.')` and the synapse id of meta data table used for the analysis is `r METADATA_ID` 
+
+Factor covariates considered for analysis are `r paste(gsub('_','\\\\_',FactorCovariates),collapse=',')`, and continuous covariates considered for the analysis are `r paste(gsub('_','\\\\_',ContCovariates),collapse=',')`
+
+Preprocess counts matrix and metadata
+```{r preprocessing, include=FALSE}
+# Preprocess metadata
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Preprocess data
+* Remove samples with no Diffname short
+* Remove somatic samples and samples with no Cell Type
+* Remove samples with abnornal or no C4 Karyotype Result
+* Remove private samples (if any)
+```{r filtering, echo=TRUE}
+#### Pre processing mRNA expression counts and metadata ####
+metadata_keep <- METADATA %>% 
+  filter(UID %in% colnames(EXP))
+
+metadata_filtered <- metadata_keep %>%
+  filter(Diffname_short != "") %>%
+  filter(UID != "H9P50") %>%
+  filter(UID %in% colnames(EXP)) %>%
+  filter(Cell_Type == "PSC") %>%
+  filter(C4_Karyotype_Result != "abnormal") %>%
+  filter(public == "true")
+
+REMOVED_UID <- setdiff(metadata_keep$UID, metadata_filtered$UID)
+METADATA <- metadata_filtered
+rownames(METADATA) <- metadata_filtered$UID
+EXP <- EXP[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed:
+
+`r paste(gsub('_','\\\\_',REMOVED_UID),collapse=',')` 
+
+### Covariate clustering
+Determine relationship between covariates
+```{r covariates.clustering}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+```
+Covariate correlation
+```{r covariates.correlation, fig.width=10, fig.height=10}
+COVARIATES.CORRELATION = getAssociationStatistics(COVARIATES, PVAL = 0.1)
+ggheatmap.show(COVARIATES.CORRELATION$plot, col.width=0.3, row.width=0.15)
+```
+### Probe filtering
+Retain probes with beta greater than 0.5 in atleast one sample and less than 0.5 in atleast one other sample
+```{r gene.filtering, cache=TRUE, fig.width=8, fig.height=8, echo=TRUE}
+exp.variance <- apply(as.matrix(EXP),1,var)
+ind.remove1 <- exp.variance < sort(exp.variance)[round(0.25*length(exp.variance))]
+ind.remove2 <- (rowSums(EXP <= 0.25)/dim(EXP)[2] == 1) | (rowSums(EXP >= 0.75)/dim(EXP)[2] == 1)
+
+EXP <- EXP[!ind.remove1 & !ind.remove2,]
+```
+`r dim(EXP)[1]` number of probes and `r dim(EXP)[2]` number of samples are considered for the analysis
+### Clustering samples
+Clustering of initial data (with NULL design)
+```{r decompse.normalise.data, cache=TRUE, fig.height=8, fig.width=8}
+# Find principal components of expression to plot
+PC <- prcomp(EXP)
+
+# Plot first 2 PCs
+plotdata <- data.frame(UID=rownames(PC$rotation), 
+                       PC1=PC$rotation[,1], 
+                       PC2=PC$rotation[,2])
+
+plotdata <- merge(plotdata, METADATA, by="UID")
+plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+p <- p + geom_point(aes(color = Cell_Line_Type, shape=Diffname_short, size=Gender))
+p <- p + theme_bw() + scale_size_manual(values = c(5, 2)) + scale_shape_manual(values = 1:7) + theme(legend.position="top") 
+p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+p
+```
+### Significant Covariates
+Correlation between pca of unadjusted expression and covariates is used to find significant covariates
+```{r preAdjusted.covariates, cache=TRUE}
+# Find correlation between PC's of gene expression with covariates
+DESIGN = getDesignMatrix(COVARIATES, Intercept = F)
+colnames(DESIGN$design) = sapply(colnames(DESIGN$design),function(x){substr(x,1,50)})
+preAdjustedSigCovars = runPCAandPlotCorrelations(EXP, DESIGN$design,'NULL design', isKeyPlot=TRUE)
+
+# Find significant covariates
+adjustCovars = designMatVarsToCovars(getCovariatesMap(DESIGN),preAdjustedSigCovars$significantCovars)
+```
+Significant covariates to adjust at FDR 0.1 are `r paste(gsub('_','\\\\_',adjustCovars),collapse=',')`
+```{r preAdjustedSigCovars.NULL, fig.width=22, fig.height=14}
+preAdjustedSigCovars[["PC_res"]][[1]]$plotData
+```
+```{r preAdjustedSigCovars.NULL.ALL, fig.width=24, fig.height=14}
+preAdjustedSigCovars[["PC_res"]][[2]]$plotData
+```
+### Normalisation (iterative)
+Since many covariates are confounded, re-normalising COVARIATES with an iterative design matrix. Here all the effects are chosen as fixed effects, except Donor_ID which is a random effect
+```{r iterative.adjusted.normalisation, cache =TRUE, include=FALSE}
+postAdjustCovars = list()
+postAdjustCovars$fixed = ''
+postAdjustCovars$random = 'Donor_ID'
+ 
+# Assign residual covariates
+residualSigCovars = preAdjustedSigCovars
+
+significantCovars = designMatVarsToCovars(getCovariatesMap(DESIGN), residualSigCovars$significantCovars)
+covariatesEffects = designMat2CovEffects(getCovariatesMap(DESIGN),residualSigCovars$Effects.significantCovars)
+covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars$fixed,postAdjustCovars$random))]
+
+postAdjustCovars$fixed = names(which.max(covariatesEffects))
+
+loopCount = 0 
+while(length(residualSigCovars$significantCovars)!=0 && loopCount <= 15){
+  print(paste('Using following covariates in the model', paste(paste(postAdjustCovars$fixed,collapse=','),'as fixed effects and', paste(postAdjustCovars$random,collapse=','),'as random effects'), sep=':'))
+  
+  # Post adjusted design matrix
+  DM1 = getDesignMatrix(COVARIATES[,postAdjustCovars$fixed,drop=F],Intercept = F)
+  DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
+    
+  # Estimate correlation of random effects
+  correlation <- duplicateCorrelation(EXP, design=DM1$design, block=COVARIATES$Donor_ID)
+  
+  # Fit linear model
+  FIT = lmFit(EXP, design=DM1$design, block=COVARIATES$Donor_ID, correlation = correlation$cor)
+  
+  # Residuals after normalisation
+  RESIDUAL.GENE_EXPRESSION = residuals.MArrayLM(FIT,EXP)
+  
+  # Residual covariates to choose from
+  residCovars <- setdiff(c(FactorCovariates,ContCovariates), postAdjustCovars$fixed)
+  
+  # Find PC of residual gene expression and significant covariates that are highly correlated with PCs
+  residualSigCovars = runPCAandPlotCorrelations(RESIDUAL.GENE_EXPRESSION, 
+                                                dplyr::select(as.data.frame(DESIGN$design),-starts_with('Donor_ID')),
+                                                'all adjusted design',
+                                                isKeyPlot=TRUE)
+  
+  # Add postadjusted covariates (if any)
+  significantCovars = designMatVarsToCovars(getCovariatesMap(DESIGN), residualSigCovars$significantCovars)
+  covariatesEffects = designMat2CovEffects(getCovariatesMap(DESIGN),residualSigCovars$Effects.significantCovars)
+  
+  covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars$fixed,postAdjustCovars$random))]
+  
+  postAdjustCovars$fixed = c(postAdjustCovars$fixed,names(which.max(covariatesEffects)))  
+  write.table(paste(postAdjustCovars$fixed, collapse=','), './temp.txt', append= T, row.names=F, col.names=F, quote=F)
+  loopCount = loopCount + 1
+}
+tmp <- paste('Using following covariates in the final model', paste(gsub('_','\\\\_',postAdjustCovars$fixed),collapse=','),'as fixed effects and', paste(gsub('_','\\\\_',postAdjustCovars$random),collapse=','),'as random effects')
+```
+`r tmp`
+
+### Sanity Check
+Residualise significant covariates using a linear model and find correlation between PCA of residuals with covariates
+```{r residualSigCovars, fig.width=22, fig.height=14, cache=FALSE}
+residualSigCovars[["PC_res"]][[1]]$plotData
+```
+```{r residualSigCovars.ALL, fig.width=24, fig.height=14, cache=FALSE}
+residualSigCovars[["PC_res"]][[2]]$plotData
+```
+### Calculate Residuals
+```{r residualisation, fig.height=8, fig.width=8, cache=FALSE}
+RESID.EXP = calcResiduals(EXP, DM1$design, varsToAddBackIn = c("Diffname_shortDE", "Diffname_shortEB", "Diffname_shortECTO", "Diffname_shortMESO5", "Diffname_shortSC"))
+
+# Find principal components of expression to plot
+PC <- prcomp(RESID.EXP)
+
+# Plot first 2 PCs
+plotdata <- data.frame(UID=rownames(PC$rotation), 
+                       PC1=PC$rotation[,1], 
+                       PC2=PC$rotation[,2])
+
+plotdata <- merge(plotdata, METADATA, by="UID")
+plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+p <- p + geom_point(aes(color = Cell_Line_Type, shape=Diffname_short, size=Gender))
+p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values = 1:7) + theme(legend.position="top") 
+p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+p
+```
+### Store files in synapse
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE, cache=FALSE}
+ActivityName <- 'Covariate analysis of minfi curated methylation data with mixed effects modeling'
+  
+thisFileName <- 'CovariateAnalysis_methylation_mixedEffects_All.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='methyl')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+
+# Create results folder and populate analysis results in wiki
+CODE <- Folder(name = 'Covariate Analysis Methylation Mixed Effects All', parentId = parentId)
+CODE <- synStore(CODE)
+  
+# Filtered Expression Data
+EXP <- rownameToFirstColumn(EXP,'methProbeID')  
+write.table(EXP,file = './Filtered_Methylation_Expression.tsv',sep='\t',row.names=F,col.names=T,quote=F)
+EXPR_OBJ <- File('./Filtered_Methylation_Expression.tsv',name = 'Filtered Expression',parentId = CODE$properties$id)
+EXPR_OBJ <- synStore(EXPR_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)  
+
+# Adjusted Expression Data
+RESID.EXP <- rownameToFirstColumn(RESID.EXP,'methProbeID')  
+write.table(RESID.EXP,file = './Adjusted_Methylation_Expression.tsv',sep='\t',row.names=F,col.names=T,quote=F)
+RESID_EXPR_OBJ <- File('./Adjusted_Methylation_Expression.tsv',name = 'Adjusted Expression',parentId = CODE$properties$id)
+RESID_EXPR_OBJ <- synStore(RESID_EXPR_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)  
+
+# Covariates Matrix
+COVARIATES <- rownameToFirstColumn(COVARIATES,'UID')
+write.table(COVARIATES,file = './Adjusted_Methylation_Covariates.tsv',sep='\t',row.names=F,col.names=T,quote=F)
+COVARIATES_OBJ <- File('Adjusted_Methylation_Covariates.tsv',name = 'Adjusted Covariates',parentId = CODE$properties$id)
+COVARIATES_OBJ <- synStore(COVARIATES_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
+
+# Design Matrix
+DESIGN <- rownameToFirstColumn(DM1$design,'UID')
+write.table(DESIGN,file = './Adjusted_Methylation_Design.tsv',sep='\t',row.names=F,col.names=T,quote=F)
+DESIGN_OBJ <- File('Adjusted_Methylation_Design.tsv',name = 'Adjusted Design',parentId = CODE$properties$id)
+DESIGN_OBJ <- synStore(DESIGN_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
+```
+|  *Results*           |  *SynapseID*                                                                                   |
+|  -------             |   ---------                                                                                    |
+|  Adjusted Expression |  `r paste(RESID_EXPR_OBJ$properties$id,RESID_EXPR_OBJ$properties$versionNumber,sep='.')`       |
+
+### Executed: Source code
+`r paste0('[Source R Markdown](',print(thisFile),')')`

@@ -1,0 +1,439 @@
+---
+title: "Covariate analysis of minfi curated methylation data with mixed effect modeling performed at individual differentiation stages"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('synapseClient')
+library('RColorBrewer')
+library('ggplot2')
+library('gplots')
+library('limma')
+library('edgeR')
+library('ctv')
+library('psych')
+library('reshape2')
+library('vcd')
+library('erer')
+library('fpc')
+library('data.table')
+library('dplyr')
+library('plyr')
+library('knitr')
+library('stringr')
+library('minfi')
+library('knit2synapse')
+
+## Needs the dev branch
+library(rGithubClient)
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+# 
+# knit2synapse::knitToFolderEntity(file = "./CovariateAnalysis_methylation_mixedEffects_EachDiffState.Rmd",
+#                                  parentId = 'syn4231339',
+#                                  entityName = 'Covariate Analysis Methylation Mixed Effects EachDiffState', 
+#                                  overwrite=F)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R")
+file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = FALSE)
+```
+### Download data
+```{r setup, include=FALSE, cache = FALSE}
+# Input Parameters
+EXP_ID = 'syn2233188'
+METADATA_ID = 'syn3156828'
+
+parentId = 'syn4231339'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c("Diffname_short", "BeadChip", "Row", "Column", "Cell_Line_Type", 
+                     "Tissue_of_Origin", "Reprogramming_Gene_Combination", "Culture_Conditions",  
+                     "Other_Conditions_During_Reprogramming", "Donor_Life_Stage", "Gender", 
+                     "Originating_Lab", "Donor_ID", "Cell_Type_of_Origin_Level2",
+                     "Reprogramming_Vector_Type" )
+ContCovariates = c("PassageAtThaw", "PassageAtDNAHarvest")
+```
+Factor covariates considered for analysis are `r paste(gsub('_','\\\\_',FactorCovariates),collapse=',')`, and continuous covariates considered for the analysis are `r paste(gsub('_','\\\\_',ContCovariates),collapse=',')`
+
+Obtain count matrix and metadata from synapse
+```{r getdata, cache=FALSE, include=FALSE}
+# Get count matrix
+EXP_OBJ = synGet(EXP_ID)
+ALL_USED_IDs = EXP_OBJ$properties$id
+EXP = fread(getFileLocation(EXP_OBJ), data.table = F)
+row.names(EXP) = EXP[,1]
+EXP = dplyr::select(EXP,-(ProbeID))
+
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '))
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = METADATA_OBJ@schema
+METADATA = METADATA_OBJ@values
+```
+Synapse id of count matrix used for the analysis is `r paste(EXP_OBJ$properties$id,EXP_OBJ$properties$versionNumber,sep='.')` and the synapse id of meta data table used for the analysis is `r METADATA_ID` 
+
+Preprocess counts matrix and metadata
+```{r preprocessing, include=FALSE, cache = FALSE}
+# Preprocess metadata
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Preprocess data
+* Remove samples with no Diffname short
+* Remove somatic samples and samples with no Cell Type
+* Remove samples with abnornal or no C4 Karyotype Result
+```{r filtering, echo=TRUE, cache = FALSE}
+#### Pre processing mRNA expression counts and metadata ####
+metadata_filtered <- 
+  METADATA %>%
+  filter(Diffname_short != "") %>%
+  filter(UID != "H9P50") %>%
+  filter(UID %in% colnames(EXP)) %>%
+  filter(Cell_Type == "PSC") %>%
+  filter(C4_Karyotype_Result != "abnormal" | C4_Karyotype_Result != NA)
+
+REMOVED_UID <- setdiff(colnames(EXP), metadata_filtered$UID)
+METADATA <- METADATA[metadata_filtered$UID,]
+EXP <- EXP[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed:
+
+`r paste(gsub('_','\\\\_',REMOVED_UID),collapse=', ')` 
+### Covariate clustering
+Determine relationship between covariates
+```{r covariates.clustering,cache=FALSE}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+
+# Split covariates 
+COVARIATES = split(COVARIATES,COVARIATES$Diffname_short)
+```
+Covariate correlation
+```{r covariates.correlation, fig.width=10, fig.height=10, cache = FALSE}
+covariateCorrelation <- function(COVARIATES){  
+  Diffname = unique(COVARIATES$Diffname_short)
+  writeLines('------------------------------------------------------------------------------')
+  writeLines(paste('Differentiation state:',as.character(Diffname)))
+  writeLines('------------------------------------------------------------------------------')
+  
+  COVARIATES = droplevels(COVARIATES)
+  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+  
+  # Correlation between covariates
+  COVARIATES.CORRELATION = getAssociationStatistics(COVARIATES, PVAL = 0.1)  
+  print(ggheatmap.show(COVARIATES.CORRELATION$plot, col.width=0.3, row.width=0.15))
+  
+  return(list(COVARIATES.CORRELATION = COVARIATES.CORRELATION))
+}
+
+COVARIATES.CORRELATION = lapply(COVARIATES, covariateCorrelation)
+```
+### Probe filtering
+Retain probes with beta greater than 0.5 in atleast one sample and less than 0.5 in atleast one other sample
+```{r gene.filtering, cache=TRUE, fig.width=8, fig.height=8, echo=TRUE, cache = FALSE}
+splitData <- function(cols,EXP,METADATA){
+  Diffname = unique(METADATA[cols,'Diffname_short'])
+  writeLines('------------------------------------------------------------------------------');
+  writeLines(paste('Differentiation state:',as.character(Diffname)));
+  writeLines('------------------------------------------------------------------------------');
+  
+  ind.remove <- (rowSums(EXP[,cols] <= 0.2)/dim(EXP[,cols])[2] == 1) | (rowSums(EXP[,cols] >= 0.7)/dim(EXP[,cols])[2] == 1)
+  
+  EXP <- EXP[!ind.remove,cols]  
+  
+  writeLines(paste(dim(EXP)[1],'number of probes and',dim(EXP)[2],'number of samples are considered for the analysis'));
+  return(EXP)
+}
+
+PROC.EXP <- tapply(colnames(EXP),
+                   factor(METADATA$Diffname_short),
+                   splitData,
+                   EXP,
+                   METADATA)
+```
+
+Clustering of initial normalised data (with NULL design)
+```{r decompse.normalise.data, include=TRUE, cache=TRUE, fig.height=8, fig.width=8, cache = FALSE}
+plotPCAMethylExpression <- function(COVARIATES, PROC.EXP){ 
+  writeLines('------------------------------------------------------------------------------')
+  diffstate = unique(COVARIATES$Diffname_short)
+  writeLines(paste('Differentiation state:',as.character(diffstate)))
+  writeLines('------------------------------------------------------------------------------')
+
+  # Drop unilevel covariates
+  COVARIATES = droplevels(COVARIATES)
+  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+
+  # Find principal components of expression to plot
+  PC <- prcomp(PROC.EXP[[diffstate]])
+  
+  # Plot first 2 PCs
+  plotdata <- data.frame(UID = rownames(PC$rotation), 
+                         PC1 = PC$rotation[,1], 
+                         PC2 = PC$rotation[,2])
+  
+  plotdata <- merge(plotdata, METADATA[colnames(PROC.EXP[[diffstate]]),], by="UID")
+  plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+  
+  p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+  p <- p + geom_point(aes(color = Gender, shape=Reprogramming_Vector_Type, size=Cell_Line_Type))
+  p <- p + theme_bw() + scale_size_manual(values = c(5, 2)) + scale_shape_manual(values = 1:7) + theme(legend.position="top") 
+  p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+  print(p)
+
+  return(list(p = p))
+}
+
+# PCA plots for methyl expression
+PCA.METHYL.EXPRESSION = lapply(COVARIATES, plotPCAMethylExpression, PROC.EXP)
+```
+### Significant Covariates
+Correlation between pca of unadjusted expression and covariates is used to find significant covariates
+```{r preAdjusted.covariates, include = TRUE, cache=FALSE, fig.width=25, fig.height=12, cache = FALSE}
+plotMethylCovariatesCorrelation <- function(COVARIATES, PROC.EXP){
+  writeLines('------------------------------------------------------------------------------')
+  diffstate = unique(COVARIATES$Diffname_short)
+  writeLines(paste('Differentiation state:',as.character(diffstate)))
+  writeLines('------------------------------------------------------------------------------')
+  
+  # Drop unilevel covariates
+  COVARIATES = droplevels(COVARIATES)
+  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]
+
+  # Find correlation between PC's of gene expression with covariates
+  DESIGN = getDesignMatrix(COVARIATES, Intercept = F)
+  colnames(DESIGN$design) = sapply(colnames(DESIGN$design),function(x){substr(x,1,50)})
+  preAdjustedSigCovars = runPCAandPlotCorrelations(PROC.EXP[[diffstate]], 
+                                                   DESIGN$design,
+                                                   'NULL design')
+  
+  # Find significant covariates
+  adjustCovars = designMatVarsToCovars(getCovariatesMap(DESIGN),preAdjustedSigCovars$significantCovars)
+  
+  # Plot preAdjustedSigCovars
+  print(preAdjustedSigCovars[["PC_res"]][[2]]$plotData)  
+  
+  writeLines('------------------------------------------------------------------------------')
+  writeLines(paste('Significant covariates to adjust at FDR 0.1 are',paste(gsub('_','_',adjustCovars), collapse= ',')))
+  writeLines('------------------------------------------------------------------------------')
+  writeLines('')
+  writeLines('')
+  
+  return(list(DESIGN = DESIGN,
+              adjustCovars = adjustCovars,
+              preAdjustedSigCovars = preAdjustedSigCovars))  
+}
+
+PREADJUSTED.COVARIATES = lapply(COVARIATES, plotMethylCovariatesCorrelation, PROC.EXP)
+```
+### Normalisation (iterative)
+Since many covariates are correlated, re-normalising COVARIATES with an iterative design matrix. All effects are considered as fixed effects, except Donor_ID which is a random effect
+```{r iterative.adjusted.normalisation, cache = FALSE, include=TRUE, fig.width=25, fig.height=12}
+iterativeMethylNormalisation <- function(COVARIATES, 
+                                         PROC.EXP,
+                                         PREADJUSTED.COVARIATES){
+  writeLines('------------------------------------------------------------------------------')
+  diffstate = unique(COVARIATES$Diffname_short)  
+  writeLines(paste('Differentiation state:',as.character(diffstate)))
+  writeLines('------------------------------------------------------------------------------')
+  
+  # Drop unilevel covariates
+  COVARIATES = droplevels(COVARIATES)
+  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]    
+  
+  # Assign return values
+  FIT = c()
+  CORRELATION = c()
+  RESIDUAL.METHYL.EXPRESSION = c()  
+  postAdjustCovars = c()
+  
+  # Assign residual covariates
+  residualSigCovars = PREADJUSTED.COVARIATES[[diffstate]]$preAdjustedSigCovars
+  
+  significantCovars = designMatVarsToCovars(getCovariatesMap(PREADJUSTED.COVARIATES[[diffstate]]$DESIGN),
+                                            residualSigCovars$significantCovars)
+  covariatesEffects = designMat2CovEffects(getCovariatesMap(PREADJUSTED.COVARIATES[[diffstate]]$DESIGN),
+                                           residualSigCovars$Effects.significantCovars)
+  covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars,'Donor_ID'))]
+    
+  postAdjustCovars = names(which.max(covariatesEffects))
+ 
+  loopCount = 0 
+  while(length(covariatesEffects) != 0 && loopCount <= 15){
+    writeLines(paste('Using following covariates in the model:',
+                     paste(postAdjustCovars,collapse=', '),
+                     'as fixed effects'
+                     ))
+    
+    # Post adjusted design matrix
+    DM1 = getDesignMatrix(COVARIATES[,postAdjustCovars,drop=F],Intercept = F)
+    DM1$design = DM1$design[,linColumnFinder(DM1$design)$indepCols]
+        
+    # Estimate correlation between donor effects
+    CORRELATION = duplicateCorrelation(PROC.EXP[[diffstate]],
+                                       design = DM1$design,
+                                       block = COVARIATES$Donor_ID)
+    
+    if(abs(CORRELATION$cor) == 1 || abs(CORRELATION$cor) == 0){
+      writeLines('Random effects correlation cannot be estimated')
+      break
+    }
+    
+    # Fit linear model with chosen design
+    FIT = lmFit(PROC.EXP[[diffstate]],
+                design = DM1$design,
+                block = COVARIATES$Donor_ID,
+                correlation = CORRELATION$consensus.cor)
+    
+    # Residuals after normalisation
+    RESIDUAL.METHYL.EXPRESSION = residuals.MArrayLM(FIT,PROC.EXP[[diffstate]])
+    
+    # Residual covariates to choose from
+    residCovars <- setdiff(c(FactorCovariates,ContCovariates), postAdjustCovars)
+    
+    # Find PC of residual gene expression and significant covariates that are highly correlated with PCs 
+    DESIGN = as.data.frame(PREADJUSTED.COVARIATES[[diffstate]]$DESIGN$design)
+    residualSigCovars = runPCAandPlotCorrelations(RESIDUAL.METHYL.EXPRESSION, 
+                                                  dplyr::select(DESIGN, -starts_with('Donor_ID')),
+                                                  'residuals')
+    
+    # Add postadjusted covariates (if any)
+    significantCovars = designMatVarsToCovars(getCovariatesMap(PREADJUSTED.COVARIATES[[diffstate]]$DESIGN),
+                                              residualSigCovars$significantCovars)
+    covariatesEffects = designMat2CovEffects(getCovariatesMap(PREADJUSTED.COVARIATES[[diffstate]]$DESIGN),
+                                             residualSigCovars$Effects.significantCovars)
+    covariatesEffects = covariatesEffects[setdiff(significantCovars,c(postAdjustCovars,'Donor_ID'))]
+    
+    postAdjustCovars = c(postAdjustCovars,names(which.max(covariatesEffects)))
+    write.table(diffstate, file = './temp.txt', append=T, col.names=F, row.names=F,quote=F)
+    write.table(paste(postAdjustCovars, collapse=','), file = './temp.txt', append=T, col.names=F, row.names=F,quote=F)
+    loopCount = loopCount + 1
+  }
+  writeLines('--------------------------------------------------------------------------------------------')
+  writeLines(paste('Using following covariates in the final model', paste(paste(postAdjustCovars,collapse=','),'as fixed effects and Donor_ID as random effects')))
+  writeLines('--------------------------------------------------------------------------------------------')
+  writeLines('')
+  
+  ### Sanity Check
+  print(residualSigCovars[["PC_res"]][[2]]$plotData)
+  
+  writeLines('---------------------------------------------------------------------------------------------')
+  
+  return(list(FIT = FIT,
+              RESIDUAL.METHYL.EXPRESSION = RESIDUAL.METHYL.EXPRESSION,
+              residualSigCovars = residualSigCovars,
+              postAdjustCovars = postAdjustCovars))
+}
+POSTADJUSTED.COVARIATES = lapply(COVARIATES, iterativeMethylNormalisation, PROC.EXP, PREADJUSTED.COVARIATES)
+```
+
+### Synapse Store
+Store processed beta values, covariates, and design matrices
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE, cache=FALSE}
+ActivityName <- 'Covariate Analysis of minfi aligned methylation data at each diff state with mixed effects'
+  
+thisFileName <- 'CovariateAnalysis_methylation_mixedEffects_EachDiffState.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='methyl')
+thisFile <- getPermlink(repository = thisRepo, 
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Populate wiki with results
+CODE <- Folder(name = 'Covariate Analysis Methylation Mixed Effects EachDiffState', 
+               parentId = parentId)
+CODE <- synStore(CODE)
+
+storeFilesInSynapse <- function(COVARIATES, PROC.EXP, POSTADJUSTED.COVARIATES, CODE){
+  diffstate = unique(COVARIATES$Diffname_short)  
+    
+  # Drop unilevel covariates
+  COVARIATES = droplevels(COVARIATES)
+  COVARIATES = COVARIATES[,sapply(COVARIATES, function(x) length(levels(x))) > 1]    
+  
+  # Store expression
+  EXP <- rownameToFirstColumn(PROC.EXP[[diffstate]],'ProbeIDs')
+  write.table(EXP, 
+              file = paste0('./Filtered_Beta_',diffstate,'.tsv'), 
+              sep='\t', 
+              row.names=F, 
+              col.names=T, 
+              quote=F)
+  EXP_OBJ <- File(paste0('./Filtered_Beta_',diffstate,'.tsv'), 
+                  name = paste('Filtered Beta Values',diffstate), 
+                  parentId = CODE$properties$id)
+  EXP_OBJ <- synStore(EXP_OBJ, 
+                      used = ALL_USED_IDs, 
+                      activityName = ActivityName, 
+                      executed = thisFile) 
+    
+  # Covariates Matrix
+  COVARIATES <- rownameToFirstColumn(COVARIATES,'UID')
+  write.table(COVARIATES, 
+              file = paste0('./Adjusted_Methylation_Covariates_',diffstate,'.tsv'), 
+              sep='\t', 
+              row.names=F, 
+              col.names=T,
+              quote=F)
+  COVARIATES_OBJ <- File(paste0('Adjusted_Methylation_Covariates_',diffstate,'.tsv'),
+                         name = paste('Adjusted Covariates',diffstate),
+                         parentId = CODE$properties$id)
+  COVARIATES_OBJ <- synStore(COVARIATES_OBJ, 
+                             used = ALL_USED_IDs, 
+                             activityName = ActivityName, 
+                             executed = thisFile)
+  
+  # Design Matrix
+  DESIGN <- rownameToFirstColumn(POSTADJUSTED.COVARIATES[[diffstate]]$FIT$design,'UID')
+  write.table(DESIGN,
+              file = paste0('./Adjusted_Methylation_Design_',diffstate,'.tsv'),
+              sep='\t',
+              row.names=F,
+              col.names=T,
+              quote=F)
+  DESIGN_OBJ <- File(paste0('Adjusted_Methylation_Design_',diffstate,'.tsv'),
+                     name = paste('Adjusted Design',diffstate),
+                     parentId = CODE$properties$id)
+  DESIGN_OBJ <- synStore(DESIGN_OBJ,
+                         used = ALL_USED_IDs, 
+                         activityName = ActivityName, 
+                         executed = thisFile)
+}
+STORED.FILES = lapply(COVARIATES, storeFilesInSynapse, PROC.EXP, POSTADJUSTED.COVARIATES, CODE)
+```
+### Executed: Source code
+`r paste0('[Source R Markdown](',print(thisFile),')')`

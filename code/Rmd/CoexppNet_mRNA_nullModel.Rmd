@@ -1,0 +1,356 @@
+---
+title: "Coexpression Network Analysis for eXpress aligned mRNA data with NULL voom model"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library(synapseClient)
+library(data.table)
+library(dplyr)
+library(knitr)
+library(stringr)
+library(RColorBrewer)
+library(ggplot2)
+library(gplots)
+library(limma)
+library(edgeR)
+library(ctv)
+library(psych)
+library(reshape2)
+library(vcd)
+library(erer)
+library(fpc)
+library(WGCNA)
+library(Rclusterpp)
+library(circlize)
+library(knit2synapse)
+
+## Needs the dev branch
+library(rGithubClient)
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+# source('/mnt/Github/knit2synapse-1/R/knitFile2SynapseFolder.R')
+# knitToFolderEntity(file = "./CoexppNet_mRNA_nullModel.Rmd", 
+#                    entityName = 'Coexpression Network Analysis mRNA All Null Model', 
+#                    parentId = 'syn3256504', 
+#                    overwrite=F)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R")
+file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Download data
+```{r setup, include=FALSE}
+# Input Parameters
+COUNT_ID = 'syn3446250'
+METADATA_ID = 'syn3156503'
+
+SYNAPSE_STORE = T
+parentId = 'syn3256504'
+
+# Specify factor and continuous covarites pool (adjusted covariates will only be the subset of these covariates)
+FactorCovariates = c('Diffname_short', 'run', 'lane', 'Cell_Line_Type', 'Cell_Line_of_Origin', 'Tissue_of_Origin', 'Reprogramming_Gene_Combination', 'Culture_Conditions', 'Donor_Life_Stage', 'Race', 'Ethnicity' , 'Gender', 'Disease', 'Originating_Lab', 'Donor_ID', 'Cell_Type_of_Origin_Level2', 'Reprogramming_Vector_Type')
+ContCovariates = c('PassageAtThaw', 'PassageAtHarvest')
+```
+Synapse id of count matrix used for the analysis is `r COUNT_ID` and the synapse id of meta data table used for the analysis is `r METADATA_ID`. 
+
+Factor covariates considered for analysis are `r paste(gsub('_','\\\\_',FactorCovariates),collapse=',')`, and continuous covariates considered for the analysis are `r paste(gsub('_','\\\\_',ContCovariates),collapse=',')`.
+
+Obtain count matrix and metadata from synapse.
+```{r getdata, cache=TRUE, include=FALSE}
+# Get count matrix
+COUNT_OBJ = synGet(COUNT_ID)
+ALL_USED_IDs = COUNT_OBJ$properties$id
+COUNT = fread(getFileLocation(COUNT_OBJ), data.table=FALSE)
+row.names(COUNT) = COUNT[,1]
+COUNT = COUNT[,-(1)]
+
+# Get metadata
+METADATA_OBJ = synTableQuery(paste('SELECT * FROM',METADATA_ID,sep=' '))
+ALL_USED_IDs[length(ALL_USED_IDs)+1] = METADATA_OBJ@schema
+METADATA = METADATA_OBJ@values
+```
+Preprocess counts matrix and metadata.
+```{r preprocessing, include=FALSE}
+# Preprocess metadata
+METADATA[METADATA == 'N/A'] = NA
+
+# Replace all special characters with blank
+myFix <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+METADATA <- METADATA %>%
+  dplyr::mutate_each(funs(myFix), -UID, -C4_Cell_Line_ID, -biologicalSampleName) # fix them but don't touch some columns
+
+# Set rownames
+rownames(METADATA) = METADATA$UID
+```
+### Preprocess data
+* Remove somatic samples and samples with not type.
+* Remove samples that failed QC and samples classified as exclude.
+* Remove samples with abnormal karyotypes.
+```{r filtering, echo=TRUE}
+#### Pre processing mRNA expression counts and metadata ####
+metadata_filtered <- 
+  METADATA %>%
+  filter(Diffname_short != "") %>%
+  filter(UID %in% colnames(COUNT)) %>%
+  filter(Cell_Type == "PSC") %>%  
+  filter(pass_qc == "TRUE") %>%
+  filter(exclude != "TRUE") %>%
+  filter(C4_Karyotype_Result != "abnormal")
+
+REMOVED_UID <- setdiff(colnames(COUNT), metadata_filtered$UID)
+METADATA <- METADATA[metadata_filtered$UID,]
+COUNT <- COUNT[, METADATA$UID]
+```
+The following `r length(REMOVED_UID)` samples were removed:
+  
+`r paste(gsub('_','\\\\_',REMOVED_UID), collapse= ',')` 
+
+### CPM Normalisation
+Determine design matrix for normalisation and differential expression analysis. 
+
+Remove genes that have less than 1 cpm counts in at least 50% of each of the individual differentiation stages.
+```{r cpmnormalisation}
+tmp <- tapply(colnames(COUNT),
+              factor(METADATA$Diffname_short),
+              function(cols,COUNT){PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(COUNT[,cols])},
+              COUNT)
+
+ugenes <- c()
+for (i in unique(METADATA$Diffname_short)) {
+  ugenes <- unique(c(ugenes,tmp[[i]]$filteredExprMatrix$genes[,1]))
+}
+
+COUNT <- COUNT[ugenes,,drop=F]
+PROCESSED_COUNTS = getGeneFilteredGeneExprMatrix(COUNT,MIN_GENE_CPM=0,
+                                                 MIN_SAMPLE_PERCENT_WITH_MIN_GENE_CPM=0)
+```
+`r dim(COUNT)[1]` genes and `r dim(COUNT)[2]` samples are considered for the analysis
+### Covariates
+```{r covariates.clustering}
+# Find inter relation between factor covariates
+COVARIATES = METADATA[,c(FactorCovariates,ContCovariates)]
+
+# Convert factor covariates to factors
+COVARIATES[,FactorCovariates] = lapply(COVARIATES[,FactorCovariates], factor)
+COVARIATES[,ContCovariates] = lapply(COVARIATES[,ContCovariates], as.numeric)
+```
+### Normalisation (with NULL)
+Initial normalisation usign voom (with NULL design)
+```{r initial.voom.normalisation}
+# Initial normalisation of gene expression
+VOOM.GENE_EXPRESSION = voom(PROCESSED_COUNTS$filteredExprMatrix, design=NULL, plot=T)
+```
+Sample clustering to check for outliers
+```{r sample.clustering, fig.height=15, fig.width=20}
+sampleTrees = flashClust::hclust(dist(t(VOOM.GENE_EXPRESSION$E)), method = "average")
+tree = cutreeStatic(sampleTrees, cutHeight = 200, minSize=3)
+
+sizeGrWindow(12,10);
+plotDendroAndColors(sampleTrees, 
+                    labels2colors(cbind(tree,COVARIATES)),
+                    groupLabels = c('Cluster',colnames(COVARIATES)))
+collectGarbage()
+```
+### Coexpression networks
+```{r wgcna.power, fig.height=8, fig.width=8}
+# Allow multi-threading within WGCNA. 
+# Caution: skip this line if you run RStudio or other third-party R environments.
+enableWGCNAThreads()
+
+# Choose a set of soft-thresholding powers
+powers = c(seq(2,10,by=1), seq(12,20, by=2));
+
+# Call the network topology analysis function
+powerTables = pickSoftThreshold(t(VOOM.GENE_EXPRESSION$E), 
+                                powerVector=powers,
+                                verbose = 2)[[2]]
+collectGarbage();
+
+# Plot the results
+colors = c("black", "red")
+
+# Will plot these columns of the returned scale free analysis tables
+plotCols = c(2,5,6,7)
+colNames = c("Scale Free Topology Model Fit", "Mean connectivity", "Median connectivity",
+"Max connectivity");
+
+# Plot the quantities in the chosen columns vs. the soft thresholding power
+p <- list()
+for (i in 1:length(plotCols)){
+  name = colnames(powerTables)[plotCols[i]]
+  p[[name]] <- ggplot(powerTables, aes_string(x = 'Power', y = name)) + geom_point()
+  p[[name]] <- p[[name]] + geom_text(aes(label= Power), size=4, hjust=1, vjust = -1)
+  p[[name]] <- p[[name]] + ggtitle(colNames[i])
+}
+
+multiplot(plotlist=p, cols=2)
+softPower = 8
+collectGarbage()
+save(list=c('powerTables'), file = 'CoexppNet_mRNA_nullModel.RData')
+```
+Beta is chosen to be `r softPower`
+```{r wgcna.adj, fig.width=15, fig.height=10}
+EXPR = t(VOOM.GENE_EXPRESSION$E)
+
+# Get adjacency matrix
+# Adj = bicor(EXPR, nThreads = 2)
+# Adj = Adj/abs(Adj) * (Adj^softPower)
+# collectGarbage()
+
+# Get topological overlap matrix
+Net = blockwiseModules((EXPR),
+                       corType = 'bicor',
+                       power=6,
+                       TOMType = "signed", 
+                       mergeCutHeight = 0.3,
+                       nThreads = 2,
+                       verbose = 3)
+collectGarbage()
+
+# Hierachical clustering
+tree = Net$dendrograms[[1]]; #Rclusterpp.hclust(as.dist(1-TOM), method = "average");
+collectGarbage()
+
+# We like large modules, so we set the minimum module size relatively high:
+minModuleSize = 30;
+
+# Module identification using dynamic tree cut:
+# unmergedNetModules = cutreeDynamic(dendro = tree, 
+#                                    distM = 1-TOM,
+#                                    deepSplit = 2, 
+#                                    minClusterSize = minModuleSize,
+#                                    pamRespectsDendro = TRUE)
+# unmergedNetModules.colors = labels2colors(unmergedNetModules)
+unmergedNetModules.colors = Net$unmergedColors
+collectGarbage()
+```
+Dendrogram tree of gene clustering
+```{r dendro.modules, fig.height=12, fig.width=20}
+for (i in 1:length(Net$dendrograms)){
+  sizeGrWindow(12,10);
+  plotDendroAndColors(Net$dendrograms[[i]], Net$unmergedColors[Net$blockGenes[[i]]], "Dynamic Tree Cut",
+                      dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  }
+save(list=c('powerTables', 'Net', 'tree', 'unmergedNetModules.colors'), file = 'CoexppNet_mRNA_nullModel.RData')
+```
+### Module analysis
+```{r module.analysis}
+# Merge modules with similar expression profiles
+# Calculate module eigengenes
+unmergedMEs = moduleEigengenes(EXPR, 
+                               colors = unmergedNetModules.colors,
+                               nPC = 10)
+
+# Calculate dissimilarity between module eigen genes
+MEDiss = 1 - abs(cor(unmergedMEs$eigengenes, use = "p"))
+
+# Cluster module eigen genes
+METree = hclust(as.dist(MEDiss), method = "average");
+collectGarbage()
+
+# Plot the results
+sizeGrWindow(7,6)
+par(mfrow = c(1,1))
+plot(METree, main = "Consensus clustering of consensus module eigengenes",
+     xlab = "", sub = "")
+abline(h=0.15, col = "red")
+
+# Merge modules
+merge = mergeCloseModules(fixDataStructure(EXPR), unmergedNetModules.colors, cutHeight = 0.15, verbose = 3)
+
+# Numeric module labels
+mergedNetModules = merge$colors
+
+# Convert labels to colors
+mergedNetModules.colors = labels2colors(mergedNetModules)
+
+# Eigengenes of the new merged modules:
+mergedMEs = merge$newMEs
+
+for (i in 1:length(Net$dendrograms)){
+  sizeGrWindow(9,6)
+  plotDendroAndColors(Net$dendrograms[[i]], 
+                      cbind(unmergedNetModules.colors[Net$blockGenes[[i]]], mergedNetModules.colors[Net$blockGenes[[i]]]),
+                      c("Unmerged", "Merged"),
+                      dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  }
+save(list=c('powerTables', 'Net', 'tree', 'unmergedNetModules.colors',
+            'mergedMEs','mergedNetModules.colors'), file = 'CoexppNet_mRNA_nullModel.RData')
+```
+
+```{r compare.covars, fig.height=10, fig.width=15}
+# Set up variables to contain the module-trait correlations
+DESIGN = getDesignMatrix(COVARIATES, Intercept = F)
+
+# Calculate the correlations
+g = corr.test(mergedMEs[[1]]$data, DESIGN$design)
+
+moduleTraitCor = g$r
+moduleTraitPvalue = melt(g$p)
+moduleTraitPvalue$value = p.adjust(moduleTraitPvalue$value, 'bonferroni')
+moduleTraitPvalue = cast(moduleTraitPvalue, X1~X2)
+rownames(moduleTraitPvalue) = moduleTraitPvalue$X1
+moduleTraitPvalue = moduleTraitPvalue[,-(1)]
+moduleTraitCor[moduleTraitPvalue > 0.05] = 0
+
+moduleTraitCor = moduleTraitCor[, colSums(moduleTraitCor) != 0]
+
+Heatmap(moduleTraitCor, 
+        column_title = 'Covariates', 
+        row_title = 'Module Eigengene', 
+        name = 'Correlation',
+        col = colorRamp2(c(-1,0,1), c("green", "white", "red")))
+
+save(list=c('powerTables', 'Adj', 'TOM', 'tree', 'unmergedNetModules',
+            'mergedMEs','mergedNetModules','moduleTraitCor', 'moduleTraitPvalue'), 
+     file = 'CoexppNet_mRNA_nullModel.RData')
+```
+### Synapse Store
+```{r synapse.store, cache=FALSE, include=FALSE}
+parentId = 'syn3256504'
+
+activityName='Coexpression Network Analysis of eXpress aligned mRNA data with NULL model'
+  
+thisFileName <- 'CoexppNet_mRNA_nullModel.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='mRNANet')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Create folder to tore the results and populate analysis wiki
+CODE <- Folder(name = 'Coexpression Network Analysis mRNA All Null Model',parentId = parentId)
+CODE <- synStore(CODE)
+      
+# Store Results
+COEXPP_OBJ <- File('./CoexppNet_mRNA_nullModel.RData', name = 'Coexpression Networks', parentId = CODE$properties$id)
+COEXPP_OBJ <- synStore(COEXPP_OBJ, used = ALL_USED_IDs, activityName = activityName, executed=thisFile)
+```
