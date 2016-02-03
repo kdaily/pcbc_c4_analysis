@@ -1,0 +1,386 @@
+---
+title: "Consolidate mRNA, miRNA, and methylation differential- and co- expression results for network visualisation"
+author: "Thanneer Perumal"
+date: '`r date()`'
+output: html_document
+---
+```{r knit2synapse, eval = FALSE, include=FALSE}
+library(synapseClient)
+library(knit2synapse)
+
+synapseLogin()
+
+knit2synapse::knitToFolderEntity(file = 'ConsolidateResults.Rmd',
+                                 parentId = "syn5194922",
+                                 entityName = 'Filtered counts and interactions for networks')
+```
+
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")
+
+# Load libraries
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(reshape2)
+
+library(igraph)
+
+library(circlize)
+library(tools)
+library(ggplot2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(matrixStats)
+library(biomaRt)
+library(fpc)
+library(reshape2)
+library(EBcoexpress)
+
+library(knitr)
+library(knit2synapse)
+library(synapseClient)
+library(rGithubClient) ## Needs the dev branch
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+# file.sources = list.files('../R/lib',pattern="row*.R", full.names = T)
+# tmp = sapply(file.sources,source,.GlobalEnv)
+source('../R/lib/rownameToFirstColumn.R')
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+
+```{r synapseStore.params}
+parentId = "syn5194922"
+SYNAPSE_STORE = T  
+ALL_USED_IDs = c()
+```
+
+```{r fxns}
+downloadFile <- function(id){
+  tmp = fread(synGet(id)@filePath, data.table=F, header=T)
+}
+```
+
+
+### Download mappings
+#### Get TF-DNA mapping from Enrichr genesets
+```{r tf.dna.mapping}
+# Download TFs from Enrichr genesets
+load(synGet('syn4867851')@filePath)
+ALL_USED_IDs = c(ALL_USED_IDs,'syn4867851')
+
+# Get unique TF - gene mapping from three data bases: ChEA, TRANSFAC&JASPAR and ENCODE
+ind = grep('HUMAN', names(GeneSets$ChEA))
+TFsMapping1 = mapply(function(x, y){
+  TFname = str_split(x, '-')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+}, names(GeneSets$ChEA)[ind], GeneSets$ChEA[ind]) %>%
+  rbindlist %>%
+  unique
+
+ind = grep('human', names(GeneSets$TRANSFAC_and_JASPAR_PWMs))
+TFsMapping2 = mapply(function(x, y){
+  TFname = str_split(x, ' ')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+}, names(GeneSets$TRANSFAC_and_JASPAR_PWMs)[ind], GeneSets$TRANSFAC_and_JASPAR_PWMs[ind]) %>%
+  rbindlist %>%
+  unique
+
+ind = grep('hg19', names(GeneSets$"ENCODE_TF_ChIP-seq_2015"))
+TFsMapping3 = mapply(function(x, y){
+  TFname = str_split(x, '_')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+}, names(GeneSets$"ENCODE_TF_ChIP-seq_2015")[ind], GeneSets$"ENCODE_TF_ChIP-seq_2015"[ind]) %>%
+  rbindlist %>%
+  unique
+
+TFsMapping = rbindlist(list(TFsMapping1, TFsMapping2, TFsMapping3)) %>% unique           
+rm(list = c('GeneSets','TFsMapping1','TFsMapping2','TFsMapping3','ind'))
+WGCNA::collectGarbage()
+```
+
+
+### Download expression matrices and calculate median values at each diff state
+```{r counts}
+# Get count matrices
+counts.ids = list(mrna = 'syn5011095', mirna = 'syn5014454', methyl = 'syn4487642')
+ALL_USED_IDs = c(ALL_USED_IDs, as.character(counts.ids))
+
+counts = lapply(counts.ids, function(id){
+  x = downloadFile(id)
+  row.names(x) = x[,1]
+  x = as.matrix(x[,-(1)])
+})
+counts[[1]] = exp(counts[[1]]-0.5)
+counts[[2]] = exp(counts[[2]]-0.5)
+
+# Get associated covariates
+covariates.ids = list(mrna = 'syn5011149', mirna = 'syn5014460', methyl = 'syn4487669')
+ALL_USED_IDs = c(ALL_USED_IDs, as.character(covariates.ids))
+
+covariates = lapply(covariates.ids, function(id){
+  x = downloadFile(id)
+  row.names(x) = x[,1]
+  x = x[,-(1)]
+})
+
+# Find median values
+counts = mapply(function(count, covariate){
+  covariate = split(covariate, covariate$Diffname_short)
+  count = sapply(covariate, function(covariate, count){
+    tmp = rowMedians(count[, rownames(covariate)], na.rm=T)
+    names(tmp) = rownames(count)
+    return(tmp)
+    }, count)
+  
+  count_scaled = t(apply(count, 1, function(x){x = x/max(x, na.rm=T)}))
+  colnames(count_scaled) = paste(colnames(count_scaled),'scaled',sep='.')
+  
+  count = rownameToFirstColumn(count, 'feature')
+  count_scaled = rownameToFirstColumn(count_scaled, 'feature')
+  
+  count = full_join(count, count_scaled)
+}, counts, covariates, SIMPLIFY = F)
+
+counts = ldply(counts, .id = 'Assay')
+counts$Assay = as.character(counts$Assay)
+
+ind = which((counts$feature %in% unique(TFsMapping$feature)) & (counts$Assay == "mrna"))
+counts$Assay[ind] = 'TF'
+ind = which(!(counts$feature %in% unique(TFsMapping$feature)) & (counts$Assay == "mrna"))
+counts$Assay[ind] = 'nonTF'
+
+WGCNA::collectGarbage()
+```
+
+### Download coexpression and metadata from synapse
+```{r coExp}
+# Get coexpression data
+coExp.ids = c(TF.TF = 'syn5588503', TF.nonTF = 'syn5584105',
+              mirna.mrna = 'syn5578560', methyl.mrna = 'syn5578562',
+              methyl.mirna = 'syn5578564')
+ALL_USED_IDs = c(ALL_USED_IDs, coExp.ids)
+
+coExp = lapply(coExp.ids, function(id){
+  tmp = downloadFile(id)
+  colnames(tmp)[2:3] = c('from','to')
+  return(tmp)
+}) %>%
+  ldply(.id = 'Assay')
+```
+
+### Download differential expression results from synapse
+```{r diffExp}
+diffExp.ids = c(TF = 'syn5521879', nonTF = 'syn5521883',
+                mirna = 'syn5521885', methyl = 'syn5521887')
+ALL_USED_IDs = c(ALL_USED_IDs, diffExp.ids)
+
+diffExp = lapply(diffExp.ids, downloadFile) %>%
+  ldply(.id = 'Assay')
+```
+
+### Download differential co-expression results from synapse
+```{r diffCoExp}
+diffCoExp.ids = c(TF.TF = 'syn5594542', TF.nonTF = 'syn5586707',
+                  mirna.TF = 'syn5579744', mirna.nonTF = 'syn5583716',
+                  methyl.TF = 'syn5579746', methyl.nonTF = 'syn5583718')
+ALL_USED_IDs = c(ALL_USED_IDs, diffCoExp.ids)
+
+diffCoExp = lapply(diffCoExp.ids, function(id){
+  tmp = downloadFile(id)
+  colnames(tmp)[3:4] = c('from','to')
+  return(tmp)
+}) %>%
+  ldply(.id = 'Assay')
+```
+
+### Filter features
+Molecular entities (mRNA, miRNA or DNA methylation probes) are selected if they are differentially expressed or co-expressed in at least one of the comparisons between differentiation states 
+```{r extract.features}
+# Get differentially (co)-expressed TFs
+diffFeatures =  c(diffExp$feature,
+                  diffCoExp$from,
+                  diffCoExp$to) %>% 
+  unique
+```
+
+### Filter expresion matrices
+```{r filter.counts}
+filteredCounts = dplyr::filter(counts, feature %in% diffFeatures)
+filteredCounts$Assay = as.character(filteredCounts$Assay)
+ind = which((filteredCounts$feature %in% as.character(unique(TFsMapping$feature))) & (filteredCounts$Assay == 'mrna'))
+filteredCounts$Assay[ind] = 'TF'
+ind = which(!(filteredCounts$feature %in% unique(TFsMapping$feature)) & (filteredCounts$Assay == 'mrna'))
+filteredCounts$Assay[ind] = 'nonTF'
+```
+
+### Filter co-expression interactions
+```{r filter.int}
+filteredInteractions = dplyr::filter(coExp, from %in% diffFeatures, to %in% diffFeatures)
+```
+
+### Network with all nodes and interactions
+```{r createGraph}
+edges = dplyr::select(filteredInteractions,
+                      from, to, Assay, SC, DE, MESO5, ECTO, MESO15, MESO30, EB)
+vertices = dplyr::select(filteredCounts,
+                         feature, Assay, SC.scaled, DE.scaled, MESO5.scaled, ECTO.scaled, MESO15.scaled, MESO30.scaled, EB.scaled)
+
+g = igraph::graph_from_data_frame(edges, directed = F, vertices = vertices)
+
+scc = components(g)
+```
+
+#### Extract diff comparison specific sub-networks
+```{r sub.graphs}
+diffStates = gsub('All__','',unique(diffExp$comparison))
+
+# Get differentially (co)-expressed features, counts, coexp and graphs at each diffstate
+consolidatedData =  lapply(diffStates, function(x, diffexp, diffcoexp, count, coexp){
+  ### Filter differential expression features
+  filtered.diffEntities = diffexp$feature[grep(x, diffexp$comparison)]
+  
+  ### Filter differential co-expression features
+  filtered.diffInteractions = diffcoexp[grep(x, diffcoexp$Comparison),] %>%
+    dplyr::filter(from %in% filtered.diffEntities, to %in% filtered.diffEntities, fdr <= 0.05) %>%
+    unique
+  
+  ### Filter counts
+  filtered.counts = dplyr::filter(count, 
+                                  feature %in% unique(c(filtered.diffInteractions$from, 
+                                                        filtered.diffInteractions$to)))
+  
+  ### Filter co-expression interactions
+  filtered.interactions = dplyr::filter(coexp, feature %in% filtered.diffInteractions$feature)
+  
+  ### Create graphs
+  edges = dplyr::select(filtered.interactions,
+                        from, to, Assay, SC, DE, MESO5, ECTO, MESO15, MESO30, EB) %>%
+    dplyr::mutate(SC.sign = sign(SC), SC = abs(SC),
+                  DE.sign = sign(DE), DE = abs(DE),
+                  MESO5.sign = sign(MESO5), MESO5 = abs(MESO5),
+                  ECTO.sign = sign(ECTO), ECTO = abs(ECTO),
+                  MESO15.sign = sign(MESO15), MESO15 = abs(MESO15),
+                  MESO30.sign = sign(MESO30), MESO30 = abs(MESO30),
+                  EB.sign = sign(EB), EB = abs(EB))
+  
+  vertices = dplyr::select(filtered.counts,
+                           feature, Assay, SC.scaled, DE.scaled, MESO5.scaled, ECTO.scaled, MESO15.scaled, MESO30.scaled, EB.scaled)
+  
+  g = igraph::graph_from_data_frame(edges, directed = F, vertices = vertices)
+  
+  nodeDegree = degree(g)
+  
+  return(list(diffEntities = filtered.diffEntities,
+              counts = filtered.counts,
+              interactions = filtered.interactions,
+              graph = g, scc = scc,
+              nodeDegree = nodeDegree))
+}, diffExp, diffCoExp, counts, coExp)
+names(consolidatedData) = diffStates
+```
+
+#### Prioratise state specific markers (combined node degree)
+```{r state.specific.markers}
+diffStates = c('SC','DE','MESO5','ECTO','MESO15','MESO30','EB')
+
+allNodeDegrees = lapply(diffStates, function(x, consolidated.data){
+  ind = grep(x, names(consolidated.data))
+  tmp = mapply(function(y, name.y){
+    if (length(y$nodeDegree) != 0){
+      tmp = data.frame(feature = names(y$nodeDegree), nd = y$nodeDegree)
+      colnames(tmp) = c('feature',name.y)
+      return(unique(tmp))
+    } else{
+      tmp = data.frame(feature = NA, nd = NA)
+      colnames(tmp) = c('feature',name.y)
+      return(unique(tmp))
+    }
+  }, consolidated.data[ind], names(consolidated.data)[ind], SIMPLIFY = F) %>%
+    join_all(type='full')
+  return(tmp)
+}, consolidatedData)
+names(allNodeDegrees) = diffStates
+
+combinedNodeDegree = mapply(function(x,y){
+  x[is.na(x)] = 0
+  tmp = data.frame(feature = x[,1], comb.degree = rowSums(x[,-(1)]))
+  colnames(tmp) = c('feature',y)
+  return(tmp)
+}, allNodeDegrees, names(allNodeDegrees), SIMPLIFY = F) %>%
+  join_all(type='full') %>%
+  unique
+```
+
+### Store results in synapse
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE, cache = FALSE}
+ActivityName <- 'Filter counts and interactions for networks'
+  
+ThisFileName <- 'ConsolidateResults.Rmd'
+
+# Github link
+ThisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='discordant_anal')
+
+ThisFile <- getPermlink(repository = ThisRepo,
+                        repositoryPath=paste0('code/Rmd/', ThisFileName))    
+
+# Populate wiki with results
+CODE <- Folder(name = 'Filtered counts and interactions for networks',parentId = parentId)
+CODE <- synStore(CODE)
+
+# Write counts to synapse
+write.table(filteredCounts, file='Counts.tsv', sep = '\t', quote=F, row.names=F)
+counts_obj = File('Counts.tsv', name = 'Filtered counts', parentId = CODE$properties$id)
+counts_obj = synStore(counts_obj, used = as.character(ALL_USED_IDs), executed = ThisFile, activityName = ActivityName)
+
+# Write interactions to synapse
+write.table(filteredInteractions, file='Interactions.tsv', sep = '\t', quote=F, row.names=F)
+int_obj = File('Interactions.tsv', name = 'Filtered interactions', parentId = CODE$properties$id)
+int_obj = synStore(int_obj, used = as.character(ALL_USED_IDs), executed = ThisFile, activityName = ActivityName)
+
+# Write network files to synapse
+networks.comp = mapply(function(consolidated.data, consolidated.data.name, folder, used, thisFile, activityName){
+  print(consolidated.data.name)
+  g = consolidated.data$g
+  g = as_data_frame(g, what = "both")
+  
+  # Write nodes and attributes to a file
+  write.table(g$vertices, file = paste0('Nodes_',consolidated.data.name,'.tsv'), sep = '\t', row.names=F, quote=F)
+  node_obj = File(paste0('Nodes_',consolidated.data.name,'.tsv'), 
+                  name = paste('Nodes',consolidated.data.name), 
+                  parentId = folder$properties$id)
+  node_obj = synStore(node_obj, used = used, executed = thisFile, activityName = activityName)
+  
+  # Write edges and attributes to a file
+  write.table(g$edges, file = paste0('Edges_',consolidated.data.name,'.tsv'), sep = '\t', row.names=F, quote=F)
+  edge_obj = File(paste0('Edges_',consolidated.data.name,'.tsv'), 
+                  name = paste('Edges',consolidated.data.name), 
+                  parentId = folder$properties$id)
+  edge_obj = synStore(edge_obj, used = used, executed = thisFile, activityName = activityName)
+}, consolidatedData, names(consolidatedData), SIMPLIFY = F, MoreArgs = list(CODE, as.character(ALL_USED_IDs), ThisFile, ActivityName))
+
+# Write node degrees to a file
+write.table(combinedNodeDegree, file='NodeDegrees.tsv', sep = '\t', quote=F, row.names=F)
+nd_obj = File('NodeDegrees.tsv', name = 'Node Degrees', parentId = CODE$properties$id)
+nd_obj = synStore(nd_obj, used = as.character(ALL_USED_IDs), executed = ThisFile, activityName = ActivityName)
+```
+### Source Code
+[Source R Markdown](`r ThisFile`)

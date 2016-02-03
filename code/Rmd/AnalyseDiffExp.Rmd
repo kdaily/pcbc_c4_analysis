@@ -1,0 +1,825 @@
+---
+title: "Post analysis of gene sets from differential expression data (mRNA, methylation and miRNA)"
+author: "Thanneer Perumal"
+date: '`r date()`'
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")
+
+# Load libraries
+library(synapseClient)
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(reshape2)
+library(knitr)
+library(biomaRt)
+library(tools)
+library(knit2synapse)
+library(igraph)
+library(ComplexHeatmap)
+## Needs the dev branch
+library(rGithubClient)
+
+library(circlize)
+colfunc <- colorRampPalette(c("white", "red"))
+
+## Requires ggdendro
+# knitToFolderEntity(file = "./AnalyseDiffExp.Rmd", 
+#                    parentId = 'syn4640410',
+#                    entityName = 'Integrated Differential Expression Analysis (Differentiation state specific)', 
+#                    overwrite=F,
+#                    executed = thisFile)
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R")
+file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = FALSE)
+```
+### Download differential expression results
+```{r download.comp}
+# Get all comparison names from synapse
+compNames <- synTableQuery("SELECT * FROM syn4483642")@values
+ALL_USED_IDs = "syn4483642"
+
+# Add direction to comparison names
+compNames = rbind(compNames %>%
+                    mutate(direction = 'up',
+                           comparisonName = str_c(comparison,direction,sep='__')),
+                  compNames %>%
+                    mutate(direction = 'down',
+                           comparisonName = str_c(comparison,direction,sep='__')))
+
+# Diff states in a sensible, quasi time-based ordering
+orderedDiffState <- c("SC", "DE", "MESO5", "ECTO", "MESO15", "MESO30", "EB")
+```
+Get TF-DNA mapping from Enrichr genesets
+```{r tf.dna.mapping}
+# Download TFs from Enrichr genesets
+load(synGet('syn4867851')@filePath)
+ALL_USED_IDs = c(ALL_USED_IDs,'syn4867851')
+
+# Get unique TF - gene mapping from three data bases: ChEA, TRANSFAC&JASPAR and ENCODE
+ind = grep('HUMAN', names(GeneSets$ChEA))
+TFsMapping1 = mapply(function(x, y){
+  TFname = str_split(x, '-')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+  }, names(GeneSets$ChEA)[ind], GeneSets$ChEA[ind]) %>%
+  rbindlist %>%
+  unique
+
+ind = grep('human', names(GeneSets$TRANSFAC_and_JASPAR_PWMs))
+TFsMapping2 = mapply(function(x, y){
+  TFname = str_split(x, ' ')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+  }, names(GeneSets$TRANSFAC_and_JASPAR_PWMs)[ind], GeneSets$TRANSFAC_and_JASPAR_PWMs[ind]) %>%
+  rbindlist %>%
+  unique
+
+ind = grep('hg19', names(GeneSets$"ENCODE_TF_ChIP-seq_2015"))
+TFsMapping3 = mapply(function(x, y){
+  TFname = str_split(x, '_')[[1]][1]
+  return(list(data.frame(feature = TFname, target = y)))
+  }, names(GeneSets$"ENCODE_TF_ChIP-seq_2015")[ind], GeneSets$"ENCODE_TF_ChIP-seq_2015"[ind]) %>%
+  rbindlist %>%
+  unique
+
+TFsMapping = rbindlist(list(TFsMapping1, TFsMapping2, TFsMapping3)) %>% unique             
+```
+
+```{r thresholds, echo=TRUE}
+# Set thresholds for mRNA, miRNA and methylation
+thresh.p.mrna <- 0.05
+thresh.lfc.mrna <- 2
+
+thresh.p.mirna <- 0.05
+thresh.lfc.mirna <- 2
+
+thresh.p.methylation <- 0.05
+thresh.lfc.methylation <- 0.2
+thresh.db.methylation <- 0.6
+```
+
+#### Download mRNA data
+```{r download.mrna}
+mrna.obj <- synGet("syn4484232")
+ALL_USED_IDs <- c(ALL_USED_IDs, mrna.obj@properties$id)
+
+d.mrna <- fread(getFileLocation(mrna.obj), 
+                data.table=FALSE, 
+                showProgress = FALSE) %>% 
+  mutate(assay='mRNA', comparisonName = Comparison) %>%
+  separate(Comparison, into = c('dataRestrictionShort','comparison.short','direction'), sep='__') %>%
+  merge(dplyr::select(compNames, class, comparisonName), by = 'comparisonName') %>%
+  dplyr::rename(feature=GeneSymbol) %>%
+  dplyr::mutate(target = feature)
+```
+
+#### Download miRNA data
+```{r download.mirna}
+mirna.obj <- synGet("syn4609631")
+ALL_USED_IDs <- c(ALL_USED_IDs, mirna.obj@properties$id)
+
+d.mirna <- fread(getFileLocation(mirna.obj), 
+                 data.table=FALSE, 
+                 showProgress = FALSE) %>%
+  mutate(assay='miRNA', comparisonName = Comparison) %>%
+  separate(Comparison, into = c('dataRestrictionShort','comparison.short','direction'), sep='__') %>%
+  merge(dplyr::select(compNames, class, comparisonName), by = 'comparisonName') %>%
+  dplyr::rename(feature=GeneSymbol) 
+
+# Get miRNA mapping files
+DMAP.ID = 'syn3461627'
+ALL_USED_IDs <- c(ALL_USED_IDs, DMAP.ID)
+DMAP = fread(synGet(DMAP.ID)@filePath, data.table=F, header=F)
+setnames(DMAP, c('V1','V2'), c('hsa_id','ensembl_gene_id'))
+
+DMAP <- filter(DMAP, hsa_id %in% d.mirna$feature)
+
+# Get human related mapping
+Hs = useMart("ENSEMBL_MART_ENSEMBL", host="www.ensembl.org") # use this one when biomart.org is down
+Hs = useDataset("hsapiens_gene_ensembl", Hs)
+human_ensg2symbol = getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                          filters = "ensembl_gene_id",                         
+                          values = unique(DMAP$ensembl_gene_id),
+                          mart = Hs)
+
+DMAP <- left_join(DMAP, human_ensg2symbol, by = 'ensembl_gene_id') %>%
+  dplyr::rename(feature=hsa_id) %>% 
+  dplyr::select(feature, hgnc_symbol)
+d.mirna <- d.mirna %>% left_join(DMAP) %>% dplyr::rename(target = hgnc_symbol)
+```
+
+#### Download methylation data
+```{r download.methyl}
+methyl.obj <- synGet("syn4527629")
+ALL_USED_IDs <- c(ALL_USED_IDs, methyl.obj@properties$id)
+
+d.methyl <- fread(getFileLocation(methyl.obj), 
+                  data.table=FALSE, 
+                  showProgress = FALSE) %>%
+  mutate(assay='methyl', comparisonName = Comparison) %>%
+  separate(Comparison, into = c('dataRestrictionShort','comparison.short','direction'), sep='__') %>%
+  merge(dplyr::select(compNames, class, comparisonName), by = 'comparisonName') %>%
+  dplyr::rename(feature=methProbeIDs, target = nearestTx) %>%
+  dplyr::select(-addressA, -addressB, -channel, -platform, -percentGC, -sourceSeq, -strand, -seqnames, -start,
+                -probeType, -probeStart, -probeEnd, -probeTarget, -distanceToTSS, -nearestTSS, -end, -width,
+                -nearestTSS.ID, -distanceToTx, -nearestTx.ID)
+```
+
+#### Filter and combine all three assays
+```{r filter.feature}
+d1.mrna <- d.mrna %>%
+  filter(abs(logFC) >= thresh.lfc.mrna,
+         adj.P.value <= thresh.p.mrna,
+         class == "Diffname_short")
+
+# Merge TF-DNA list to the filtered mrna set
+d1.mrna = rbind(d1.mrna,
+                merge(dplyr::select(d1.mrna, -target), 
+                      TFsMapping, 
+                      by = "feature"))
+
+d1.mirna <- d.mirna %>%
+  filter(abs(logFC) >= thresh.lfc.mirna,
+         adj.P.value <= thresh.p.mirna,
+         class == "Diffname_short")
+
+d1.methyl <- d.methyl %>%
+  filter(abs(logFC) >= thresh.lfc.methylation,
+         adj.P.value <= thresh.p.methylation,
+         class == "Diffname_short")
+```
+#### Calculate total number of features in each diff state
+```{r number.of.feature}
+d.all = rbindlist(list(d1.mrna,d1.mirna,d1.methyl), use.names=T)
+summaryStats = lapply(orderedDiffState, function(diffState, d.all){
+  d.diffstate = d.all[grep(diffState, d.all$comparisonName),] %>%
+    tidyr::separate(comparison.short, into = c("variable1short", "vs", "variable2short"))
+  
+  # For easse of interpretation, change diffstate to be the reference state
+  ind = grep(diffState, d.diffstate$variable2short)
+  d.diffstate[ind,] = d.diffstate[ind,] %>%
+    mutate(logFC = -logFC,
+           variable2short = variable1short,
+           variable1short = diffState,
+           direction = ifelse(logFC >= 0, 'up', 'down'),
+           comparisonName = paste('All',paste(variable1short,'vs',variable2short,sep='_'),direction, sep = '__'))
+  
+  d.diffstate = split(d.diffstate, d.diffstate$variable2short)
+  
+  summaryStats = sapply(d.diffstate, function(x){
+    # miRNA
+    miRNA = x %>% filter(assay == "miRNA") %>% unique
+    
+    miRNA = miRNA %>% 
+      merge(x %>% 
+              filter(assay == "mRNA") %>% 
+              dplyr::select(feature, direction) %>% 
+              unique %>% 
+              dplyr::rename(target = feature),
+            by = "target") %>% unique
+    
+    # Split miRNA probes based on TFs/non-TFs and directionality
+    miRNA.TF = miRNA %>% 
+      filter(target %in% TFsMapping$feature)
+    miRNA.TF.sameDirection = miRNA.TF %>%
+      filter(direction.x == direction.y)
+    miRNA.TF.oppDirection = miRNA.TF %>%
+      filter(direction.x != direction.y)
+    
+    miRNA.nonTF = miRNA %>% 
+      filter(!(target %in% TFsMapping$feature))
+    miRNA.nonTF.sameDirection = miRNA.nonTF %>%
+      filter(direction.x == direction.y)
+    miRNA.nonTF.oppDirection = miRNA.nonTF %>%
+      filter(direction.x != direction.y)
+    
+    # methyl
+    methyl = x %>% filter(assay == "methyl")
+    
+    methyl = methyl %>% 
+      merge(x %>% 
+              filter(assay == "mRNA") %>% 
+              dplyr::select(feature, direction) %>% 
+              unique %>% 
+              dplyr::rename(target = feature),
+            by = "target") %>% unique
+    
+    # Split methyl probes based on TFs/non-TFs and directionality
+    methyl.TF = methyl %>% 
+      filter(target %in% TFsMapping$feature)
+    methyl.TF.sameDirection = methyl.TF %>%
+      filter(direction.x == direction.y)
+    methyl.TF.oppDirection = methyl.TF %>%
+      filter(direction.x != direction.y)
+    
+    methyl.nonTF = methyl %>% 
+      filter(!(target %in% TFsMapping$feature))
+    methyl.nonTF.sameDirection = methyl.nonTF %>%
+      filter(direction.x == direction.y)
+    methyl.nonTF.oppDirection = methyl.nonTF %>%
+      filter(direction.x != direction.y)
+    
+    # mRNA
+    mRNA = x %>% filter(assay == "mRNA") %>% unique
+    
+    # Split mRNA probes based on TFs/non-TFs and directionality
+    mRNA.TF = mRNA %>% 
+      filter(feature %in% TFsMapping$feature)
+    mRNA.TF.miRNA = mRNA.TF %>%
+      filter(feature %in% miRNA.TF.oppDirection$target)
+    mRNA.TF.methyl = mRNA.TF %>%
+      filter(feature %in% methyl.TF.oppDirection$target)
+    
+    mRNA.nonTF = mRNA %>% 
+      filter(!(feature %in% TFsMapping$feature))
+    mRNA.nonTF.TF = mRNA.nonTF %>%
+      filter(feature %in% mRNA.TF$target, 
+             !(feature %in% miRNA.nonTF.oppDirection$target),
+             !(feature %in% methyl.nonTF.oppDirection$target))
+    mRNA.nonTF.miRNA = mRNA.nonTF %>%
+      filter(feature %in% miRNA.nonTF.oppDirection$target)
+    mRNA.nonTF.methyl = mRNA.TF %>%
+      filter(feature %in% methyl.nonTF.oppDirection$target)
+    
+    # Get all relevant numbers
+    getUniqueElements <- function(y, colName){
+      y = as.data.frame(y)
+      y[,colName] %>% unlist %>% unique %>% length
+    }
+    
+    data.frame(
+      mRNA = mRNA %>% getUniqueElements('feature'),
+      
+      mRNA.TF = mRNA.TF %>% getUniqueElements('feature'),
+      mRNA.TF.miRNA = mRNA.TF.miRNA %>% getUniqueElements('feature'),
+      mRNA.TF.methyl = mRNA.TF.methyl %>% getUniqueElements('feature'),
+      
+      mRNA.nonTF = mRNA.nonTF %>% getUniqueElements('feature'),
+      mRNA.nonTF.TF = mRNA.nonTF.TF %>% getUniqueElements('feature'),
+      mRNA.nonTF.miRNA = mRNA.nonTF.miRNA %>% getUniqueElements('feature'),
+      mRNA.nonTF.methyl = mRNA.nonTF.methyl %>% getUniqueElements('feature'),
+      
+      miRNA = miRNA %>% getUniqueElements('feature'),
+      
+      miRNA.TF = miRNA.TF %>% getUniqueElements('feature'),
+      miRNA.TF.oppDirection = miRNA.TF.oppDirection %>% getUniqueElements('feature'),
+      miRNA.TF.sameDirection = miRNA.TF.sameDirection %>% getUniqueElements('feature'),
+      
+      miRNA.nonTF = miRNA.nonTF %>% getUniqueElements('feature'),
+      miRNA.nonTF.oppDirection = miRNA.nonTF.oppDirection %>% getUniqueElements('feature'),
+      miRNA.nonTF.sameDirection = miRNA.nonTF.sameDirection %>% getUniqueElements('feature'),
+      
+      methyl = methyl %>% getUniqueElements('feature'),
+      
+      methyl.TF = methyl.TF %>% getUniqueElements('feature'),
+      methyl.TF.oppDirection = methyl.TF.oppDirection %>% getUniqueElements('feature'),
+      methyl.TF.sameDirection = methyl.TF.sameDirection %>% getUniqueElements('feature'),
+      
+      methyl.nonTF = methyl.nonTF %>% getUniqueElements('feature'),
+      methyl.nonTF.oppDirection = methyl.nonTF.oppDirection %>% getUniqueElements('feature'),
+      methyl.nonTF.sameDirection = methyl.nonTF.sameDirection %>% getUniqueElements('feature'))    
+  })
+}, d.all)
+summaryStats = plyr::join_all(summaryStats)
+```
+
+#### Unique features from all three assays that are specific to each diff state
+Filtered based on those features that are specific to each cellular transitions in a given differentiation stage 
+```{r extract.feature}
+# Add TF tags
+isTF <- function(x, TFs){
+  TF = ifelse(x %in% TFs, 1, 0); 
+  return(TF)
+  }
+allSigResults = rbind(d.mrna, d.mirna, d.methyl) %>% mutate(TF = target) %>% mutate_each(funs(isTF), TF)
+
+# Prune miRNA and methylation that has opposite differential expressions in mRNA
+tmp = lapply(unique(allSigResults$comparison.short), function(comparison, allSigResults){
+  mRNA = filter(allSigResults, comparison.short == comparison & assay == 'mRNA')
+  miRNA = filter(allSigResults, comparison.short == comparison & assay == 'miRNA')
+  methyl = filter(allSigResults, comparison.short == comparison & assay == 'methyl')
+  
+  tmp3 = merge(miRNA, mRNA, by = 'target') %>% filter(direction.x != direction.y)
+  miRNA = tmp3[, c(1,grep('.x', colnames(tmp3)))]
+  colnames(miRNA) = gsub('.x','', colnames(miRNA))
+  
+  tmp3 = merge(methyl, mRNA, by = 'target') %>% filter(direction.x != direction.y)
+  methyl = tmp3[, c(1,grep('.x', colnames(tmp3)))]
+  colnames(methyl) = gsub('.x','', colnames(methyl))
+  
+  return(rbind(mRNA, miRNA, methyl))
+}, allSigResults)
+allSigResults = ldply(tmp)
+
+# Segregate results for all diff states
+diffExp = lapply(c("SC", "DE", "MESO5", "ECTO", "MESO15", "MESO30", "EB"), function(diffstate, allSigResults){
+  compName = unique(grep(diffstate, allSigResults$comparison.short, value = T))
+  tmp = dplyr::filter(allSigResults, comparison.short %in% compName)
+}, allSigResults)
+names(diffExp) = c("SC", "DE", "MESO5", "ECTO", "MESO15", "MESO30", "EB")
+
+diffExp = lapply(diffExp, function(DE.diffState){
+  # Get unique features for each transitions
+  comparisons = unique(DE.diffState$comparison.short)
+  
+  # Get unique features that are specific to this comparison
+  tmp = lapply(comparisons, function(comparison, DE.diffState){
+    featureExSet = dplyr::select(dplyr::filter(DE.diffState, comparison.short != comparison), feature) %>% unlist
+    DE.diffState = filter(DE.diffState, !(feature %in% featureExSet) & comparison.short == comparison)
+  }, DE.diffState)
+  DE.diffState = ldply(tmp)
+})
+diffExp = ldply(diffExp) %>% plyr::rename(c(".id" = "DiffState"))
+
+# Get miRNA and methylation mappings on mRNAs for each transitions
+diffExp = split(diffExp, diffExp$comparison.short)
+diffExp = lapply(diffExp, function(diffExp.comp){
+  diffExp.comp = diffExp.comp %>% mutate(miRNA = 0, methyl = 0)
+  diffExp.comp = split(diffExp.comp, diffExp.comp$assay)
+  
+  miRNA.targets = diffExp.comp$miRNA$target %>% unique %>% unlist
+  diffExp.comp$mRNA$miRNA[diffExp.comp$mRNA$feature %in% miRNA.targets] = 1
+  
+  methyl.targets = diffExp.comp$methyl$target %>% unique %>% unlist
+  diffExp.comp$mRNA$methyl[diffExp.comp$mRNA$feature %in% methyl.targets] = 1
+  
+  tmp = ldply(diffExp.comp) %>% dplyr::select(-(.id))
+  return(tmp)
+})
+diffExp = ldply(diffExp, .id = NULL)
+
+tmp <- diffExp %>% 
+  dplyr::select(DiffState, assay, feature) %>% 
+  unique %>% 
+  group_by(DiffState, assay) %>% 
+  summarise(count = n()) %>% 
+  dcast(assay~DiffState, value.var = "count")
+
+tmp[is.na(tmp)] = 0
+tmp$All = rowSums(tmp[,-(1)])
+kable(tmp)
+```
+
+```{r print.at.each.diff.state}
+tmp <- diffExp %>%
+  dplyr::select(DiffState, assay, comparison.short, feature) %>%
+  unique %>%
+  group_by(DiffState, assay, comparison.short) %>% 
+  summarise(count = n())
+tmp <- split(tmp, tmp$DiffState)
+
+for( name in names(tmp)){
+  writeLines(name)
+  tmp1 <- tmp[[name]] %>% dcast(assay~comparison.short, value.var = "count")
+  tmp1[is.na(tmp1)] = 0
+  tmp1$All = rowSums(tmp1[,-(1)])
+  print(kable(tmp1))
+}
+```
+
+### Plot expression
+Subset of genes that participate in differential expression (including targets from miRNA and methylation)
+```{r plot.exp, fig.height=28, fig.width=15}
+diffExp.mRNA = dplyr::filter(diffExp, assay == "mRNA")
+exp = fread(synGet('syn4483934')@filePath, data.table=F, header=T)
+
+exp1 = filter(exp, GeneName %in% unique(diffExp.mRNA$target))
+rownames(exp1) = exp1$GeneName
+exp1 = exp1[,-(1)]
+
+cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+cov = dplyr::arrange(cov, Diffname_short)
+exp1 = exp1[,cov$UID]
+
+ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+
+annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+rownames(annotate) = rownames(exp1)
+colnames(annotate) = c("TF", "miRNA", "methyl")
+annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                 methyl = c("1" = "blue", "0" = "white")))
+
+Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', cluster_columns = F, 
+        col = colorRamp2(seq(0,10, 2), colfunc(6)),
+        show_row_names = T, row_names_side = 'left', show_column_names = F, top_annotation = ha, show_row_hclust = F) + ha1
+```
+
+#### TF only analysis
+```{r analyse.TFs, fig.height=12, fig.width=15}
+for(i in 1:6){
+  writeLines(paste('Present in',i,'comparisons'))
+  tmp1 <- diffExp %>%
+    filter(assay == "mRNA") %>%
+    dplyr::select(feature, TF) %>%
+    dplyr::filter(TF == 1) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == i)
+
+  exp1 = filter(exp, GeneName %in% unique(tmp1$feature));
+  rownames(exp1) = exp1$GeneName
+  exp1 = exp1[tmp1$feature,-(1)]
+
+  cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+  cov = dplyr::arrange(cov, Diffname_short)
+  exp1 = exp1[,cov$UID]
+
+  ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+
+  annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+  rownames(annotate) = rownames(exp1)
+  colnames(annotate) = c("TF", "miRNA", "methyl")
+  annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+  annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                 methyl = c("1" = "blue", "0" = "white")))
+
+  h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', 
+          cluster_columns = F, cluster_rows = T,
+          col = colorRamp2(seq(0,round(max(exp1)), 2), colfunc(length(seq(0,round(max(exp1)), 2)))),
+          show_row_names = T, row_names_side = 'left', show_column_names = F, 
+          top_annotation = ha, show_row_hclust = F, split = tmp1$count) + ha1
+  
+  draw(h)  
+}
+```
+
+##### In all six comparisons
+GATA3  - down regualted in SC (no miRNA and methyl regualtion)
+FOXC1 - down regulated in SC (no miRNA and methyl regulation)
+BCL11A - down regulated in ECTO (by miRNAs hsa-miR-92b-3p,  hsa-miR-448, hsa-miR-486-3p (vs MESO15), hsa-miR-363-3p, hsa-miR-23-3p (vs MESO30), hsa-miR-23b-3p (vs SC))
+HOXA2 - upregulated in EB (miRNA regaulted transition from ECTO - hsa-miR-548ah-5p)
+HOXA5 - upregulated in EB (miRNA regulated transition from MESO5 - hsa-miR-320d)
+HOXD9 - upregulated in EB (miRNA regulated transition from SC - hsa-miR-18a-3p)
+NR5A1 - up regulated in ECTO by both methylation and miRNA  (probeID: cg14143574 for all four diff states, hsa-miR-1910-5p from EB, MESO30 and SC, hsa-miR-24-3p from MESO30, hsa-miR-326 from MESO15)
+
+##### In any five comparisons
+KLF5 - downregulated in SC (hsa-miR-18a-3p regulation in EB and MESO15, hsa-miR-1305 and hsa-miR-32-3p regulation in MESO30, no regulation of miRNA and methylation against MESO5 and DE)
+NFIB - downregulated in ECTO (hsa-miR-129-5p regulation in DE, EB, MESO30, MESO5, SC and hsa-miR-17-3p regulation in MESO30)
+NR3C1 - downregulated in ECTO (mainly by miRNAs hsa-miR-548ah-5p, hsa-miR-204-5p,hsa-miR-548p, hsa-miR-129-2-3p, hsa-miR-548ah-3p, hsa-miR-500a-5p, hsa-miR-429, hsa-miR-589-3p, hsa-miR-18b-5p, hsa-miR-18a-5p, hsa-miR-378i)
+RUNX2 - upregulated in EB (hsa-miR-19b-3p with ECTO, hsa-miR-320d with MESO5)
+ZEB1 - down regulated both in SC and EB
+
+#### miRNA affecting mRNA list (Non-TFs)
+```{r analyse.miRNA, fig.height=12, fig.width=15}
+for (i in 1:6){
+  writeLines(paste('Present in',i,'comparisons'))
+  tmp1 <- diffExp %>%
+  filter(assay == "miRNA") %>%
+  dplyr::select(feature, comparison.short) %>%
+  unique %>%
+#   dplyr::filter(TF == 0) %>%
+  group_by(feature) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  filter(count == i)
+
+  mirna.exp = fread(synGet('syn4595977')@filePath, data.table = F, header=T)
+  exp1 = filter(mirna.exp, GeneName %in% unique(tmp1$feature));
+  rownames(exp1) = exp1$GeneName
+  exp1 = exp1[,-(1)]
+
+  cov = fread(synGet('syn4595983')@filePath, data.table=F, header=T)
+  cov = dplyr::arrange(cov, Diffname_short)
+  exp1 = exp1[,cov$UID]
+  
+  ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+  
+  annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+  rownames(annotate) = rownames(exp1)
+  colnames(annotate) = c("TF", "miRNA", "methyl")
+  annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+  annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                   methyl = c("1" = "blue", "0" = "white")))
+
+  h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', 
+          cluster_columns = F, cluster_rows = T,
+          col = colorRamp2(seq(0,round(max(exp1)), 2), colfunc(length(seq(0,round(max(exp1)), 2)))),
+          show_row_names = T, row_names_side = 'left', show_column_names = F, 
+          top_annotation = ha, show_row_hclust = F) + ha1
+  
+  draw(h)
+}
+```
+
+#### mRNA affected by miRNA
+```{r analyse.mRNA.miRNA, fig.height=28, fig.width=15}
+allExp = data.frame()
+group = c()
+for (i in 1:6){
+  tmp1 <- diffExp %>%
+    filter(assay == "miRNA") %>%
+    dplyr::select(feature, comparison.short) %>%
+    unique %>%
+#     dplyr::filter(TF == 0) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == i)
+
+  tmp2 <- diffExp %>%
+    filter(assay == "miRNA", feature %in% tmp1$feature) %>%
+    dplyr::select(target) %>%
+    unique %>% unlist %>% as.character
+
+  exp1 = filter(exp, GeneName %in% tmp2);
+  rownames(exp1) = exp1$GeneName
+  exp1 = exp1[,-(1)]
+
+  allExp = rbind(allExp, exp1)
+  group = c(group, rep(i, dim(exp1)[1]))
+}
+  exp1 = allExp
+  cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+  cov = dplyr::arrange(cov, Diffname_short)
+  exp1 = exp1[,cov$UID]
+  
+  ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+  
+  annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+  rownames(annotate) = rownames(exp1)
+  colnames(annotate) = c("TF", "miRNA", "methyl")
+  annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+  annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                   methyl = c("1" = "blue", "0" = "white")))
+
+  h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', 
+          cluster_columns = F, cluster_rows = T,
+          col = colorRamp2(seq(0,round(max(exp1)), 2), colfunc(length(seq(0,round(max(exp1)), 2)))),
+          show_row_names = T, row_names_side = 'left', show_column_names = F, 
+          top_annotation = ha, show_row_hclust = F, split = group) + ha1
+  
+  draw(h)
+```
+
+#### Methylation probes affecting mRNA list (Non-TFs)
+```{r analyse.methyl, fig.height=16, fig.width=15}
+methyl.exp = fread(synGet('syn4487642')@filePath, data.table = F, header=T)
+for (i in 1:4){
+  writeLines(paste('Present in',i,'comparisons'))
+  tmp1 <- diffExp %>%
+    filter(assay == "methyl") %>%
+    dplyr::select(feature, comparison.short) %>%
+    unique %>%
+#     dplyr::filter(TF == 0) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == i)
+
+  exp1 = filter(methyl.exp, methProbeID %in% unique(tmp1$feature));
+  rownames(exp1) = exp1$methProbeID
+  exp1 = exp1[,-(1)]
+
+  cov = fread(synGet('syn4487669')@filePath, data.table=F, header=T)
+  cov = dplyr::arrange(cov, Diffname_short)
+  exp1 = exp1[,cov$UID]
+  
+  ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+  
+  h = Heatmap(exp1, name = "Beta", row_title = 'Probes', column_title = 'Samples', 
+          cluster_columns = F, cluster_rows = T,
+          col = colorRamp2(seq(0,1, 0.1), colfunc(length(seq(0,1, 0.1)))),
+          show_row_names = T, row_names_side = 'left', show_column_names = F, 
+          top_annotation = ha, show_row_hclust = F)
+  
+  draw(h)
+}
+```
+
+#### mRNA affected by methylation
+```{r analyse.mRNA.methylation, fig.height=28, fig.width=15}
+allExp = data.frame()
+group = c()
+for (i in 1:4){
+  tmp1 <- diffExp %>%
+    filter(assay == "methyl") %>%
+    dplyr::select(feature, comparison.short) %>%
+    unique %>%
+#     dplyr::filter(TF == 0) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == i)
+
+  tmp2 <- diffExp %>%
+    filter(assay == "methyl", feature %in% tmp1$feature) %>%
+    dplyr::select(target) %>%
+    unique %>% unlist %>% as.character
+
+  exp1 = filter(exp, GeneName %in% tmp2);
+  rownames(exp1) = exp1$GeneName
+  exp1 = exp1[,-(1)]
+
+  allExp = rbind(allExp, exp1)
+  group = c(group, rep(i, dim(exp1)[1]))
+}
+  exp1 = allExp
+  cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+  cov = dplyr::arrange(cov, Diffname_short)
+  exp1 = exp1[,cov$UID]
+  
+  ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+  
+  annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+  rownames(annotate) = rownames(exp1)
+  colnames(annotate) = c("TF", "miRNA", "methyl")
+  annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+  annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+  ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                   methyl = c("1" = "blue", "0" = "white")))
+
+  h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', 
+          cluster_columns = F, cluster_rows = T,
+          col = colorRamp2(seq(0,round(max(exp1)), 2), colfunc(length(seq(0,round(max(exp1)), 2)))),
+          show_row_names = T, row_names_side = 'left', show_column_names = F, 
+          top_annotation = ha, show_row_hclust = F, split = group) + ha1
+  
+  draw(h)
+```
+
+```{r integrated.analysis}
+tmp1 <- diffExp %>%
+    filter(assay == "mRNA") %>%
+    dplyr::select(feature, TF) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == 6)
+
+tmp = diffExp %>% filter(feature %in% tmp1$feature) %>% separate(comparison.short, into = c("v1","vs","v2"), sep="_")
+tmp = split(tmp, tmp$feature)
+
+tmp1 = lapply(tmp, function(x, orderedDiffState){
+  diffstate = setdiff(orderedDiffState, dplyr::select(x, DiffState) %>% unique %>% unlist %>% as.character)
+  tmp1 = x %>% dplyr::filter(v2 %in% diffstate) %>% mutate(v2 = v1, v1 = diffstate, logFC = -logFC, direction = ifelse(logFC<0, 'down', 'up'))
+  tmp2 = x %>% dplyr::filter(v1 %in% diffstate)
+  tmp3 = rbind(tmp1,tmp2) 
+  tmp3 = dplyr::select(tmp3, feature, target, direction, v1) %>% unique
+  }, orderedDiffState)
+tmp1 = plyr::ldply(tmp1, .id = NULL)
+
+exp1 = filter(exp, GeneName %in% tmp1$feature)
+rownames(exp1) = exp1$GeneName
+exp1 = exp1[tmp1$feature,-(1)]
+
+cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+cov = dplyr::arrange(cov, Diffname_short)
+exp1 = exp1[,cov$UID]
+
+ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+
+annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+rownames(annotate) = rownames(exp1)
+colnames(annotate) = c("TF", "miRNA", "methyl")
+annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                 methyl = c("1" = "blue", "0" = "white")))
+
+pdf('mRNA.pdf', width = 18, height = 32)
+h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', cluster_columns = F, 
+        col = colorRamp2(seq(0,10, 2), colfunc(6)),
+        show_row_names = T, row_names_side = 'left', show_column_names = F, top_annotation = ha, show_row_hclust = F, split = tmp1$v1) + ha1
+draw(h)
+dev.off()
+
+tmp1 <- diffExp %>%
+    filter(assay == "miRNA") %>%
+    dplyr::select(feature, TF) %>%
+    group_by(feature) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count)) %>%
+    filter(count == 6)
+
+tmp = diffExp %>% filter(feature %in% tmp1$feature) %>% separate(comparison.short, into = c("v1","vs","v2"), sep="_")
+tmp = split(tmp, tmp$feature)
+
+tmp1 = lapply(tmp, function(x, orderedDiffState){
+  diffstate = setdiff(orderedDiffState, dplyr::select(x, DiffState) %>% unique %>% unlist %>% as.character)
+  tmp1 = x %>% dplyr::filter(v2 %in% diffstate) %>% mutate(v2 = v1, v1 = diffstate, logFC = -logFC, direction = ifelse(logFC<0, 'down', 'up'))
+  tmp2 = x %>% dplyr::filter(v1 %in% diffstate)
+  tmp3 = rbind(tmp1,tmp2) 
+  tmp3 = dplyr::select(tmp3, feature, target, direction, v1) %>% unique
+  }, orderedDiffState)
+tmp1 = plyr::ldply(tmp1, .id = NULL)
+
+exp1 = filter(exp, GeneName %in% tmp1$feature)
+rownames(exp1) = exp1$GeneName
+exp1 = exp1[tmp1$feature,-(1)]
+
+cov = fread(synGet('syn4483940')@filePath, data.table=F, header=T)
+cov = dplyr::arrange(cov, Diffname_short)
+exp1 = exp1[,cov$UID]
+
+ha = HeatmapAnnotation(df = cov[,'Diffname_short',drop=F], which = "column")
+
+annotate = as.data.frame(matrix(0,dim(exp1)[1],3))
+rownames(annotate) = rownames(exp1)
+colnames(annotate) = c("TF", "miRNA", "methyl")
+annotate$TF = factor((rownames(annotate) %in% TFs)*1)
+annotate$miRNA = factor((rownames(annotate) %in% (filter(diffExp, assay == "miRNA") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+annotate$methyl = factor((rownames(annotate) %in% (filter(diffExp, assay == "methyl") %>% dplyr::select(target) %>% unique %>% unlist))*1)
+ha1 = HeatmapAnnotation(df = annotate, which = "row", col = list(TF = c("1" = "black", "0" = "white"), miRNA = c("1" = "red", "0" = "white"),
+                                                                 methyl = c("1" = "blue", "0" = "white")))
+
+pdf('mRNA.pdf', width = 18, height = 32)
+h = Heatmap(exp1, name = "logCPM", row_title = 'Genes', column_title = 'Samples', cluster_columns = F, 
+        col = colorRamp2(seq(0,10, 2), colfunc(6)),
+        show_row_names = T, row_names_side = 'left', show_column_names = F, top_annotation = ha, show_row_hclust = F, split = tmp1$v1) + ha1
+draw(h)
+dev.off()
+
+```
+
+#### Store results in synapse
+```{r synapse.store}
+obj = Folder(name = 'Integrated Differential Expression Analysis (Differentiation state specific)', parentId = 'syn4640410')
+obj = synStore(obj)
+
+thisFileName <- 'AnalyseDiffExp.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='diff_exp')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+
+
+write.table(diffExp, file = "uniqueSign.tsv", sep = "\t", row.names=F, quote=F)
+objFile = File("uniqueSign.tsv", name = "Integrated Signatures (Differentiation state specific)", parentId = obj$properties$id)
+objFile = synStore(objFile, used = ALL_USED_IDs, activityName = "Integrated Analysis of Differential Expression", executed = thisFile)
+```

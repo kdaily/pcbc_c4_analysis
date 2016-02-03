@@ -1,9 +1,9 @@
-get450KProbeMapping <- function(probeIDs, platform='HM450', genome='hg19'){
-  require(FDb.InfiniumMethylation.hg19)
+get450KProbeMapping <- function(probeIDs, genome='hg19'){
+ require(FDb.InfiniumMethylation.hg19)
   require(dplyr)
   require(plyr)
   
-  hm450 <- getPlatform(platform = platform, genome = genome)
+  hm450 <- getPlatform(platform = 'HM450', genome = genome)
   probes <- hm450[probeIDs]
     
   TSS = getNearestTSS(probes)

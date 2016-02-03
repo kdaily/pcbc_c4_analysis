@@ -1,0 +1,271 @@
+---
+title: "Post analysis filtering of feature sets from differential analysis of mRNA, miRNA, methylation and splicing"
+author: "Thanneer Perumal"
+date: '`r date()`'
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")
+
+# Load libraries
+library(plyr)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(tidyr)
+
+library(tools)
+library(ggplot2)
+library(ComplexHeatmap)
+
+library(knitr)
+library(knit2synapse)
+library(synapseClient)
+library(rGithubClient) ## Needs the dev branch
+
+synapseLogin()
+
+# source utility files from ../R/lib folder
+file.sources = list.files('../R/lib',pattern="*.R", full.names = T)
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = FALSE)
+```
+
+```{r synapseStore.params}
+parentId = "syn5194922"
+SYNAPSE_STORE = T
+
+activityName = "Filtering differential analysis results"
+
+thisFileName <- 'FilterDifferentialFeatures.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/pcbc_c4_analysis", 
+                    ref="branch", 
+                    refName='diff_exp')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+```
+
+```{r set.thresholds}
+mRNA.lfc.th <- 1
+mRNA.pval.th <- 0.05
+
+miRNA.lfc.th <- 1
+miRNA.pval.th <- 0.05
+
+methyl.changeBeta.th <- 0.4
+methyl.pval.th <- 0.05
+
+splicing.change.th <- 0.3
+splicing.pval.th <- 0.05
+```
+
+```{r fxns}
+downloadFile <- function(id){
+  tmp = fread(synGet(id)@filePath, data.table=F, header=T)
+}
+```
+### Download all comparison reference and mappings from synapse
+```{r mappings}
+# Get all comparison names from synapse
+compNames <- synTableQuery("SELECT * FROM syn4483642")@values
+ALL_USED_IDs = "syn4483642"
+
+# Add direction to comparison names
+compNames = rbind(compNames %>%
+                    mutate(direction = 'up',
+                           comparisonName = str_c(comparison,direction,sep='__')),
+                  compNames %>%
+                    mutate(direction = 'down',
+                           comparisonName = str_c(comparison,direction,sep='__')))
+
+```
+
+### Download and subset differential expression results (mRNA)
+```{r mRNA}
+mRNAIds = c(mRNAId.all = "syn5013690", mRNAId.DE = "syn5193129", 
+            mRNAId.EB = "syn5193137", mRNAId.SC = "syn5193123")
+
+mRNA.diffExp = lapply(mRNAIds, downloadFile)
+mRNA.diffExp = rbindlist(mRNA.diffExp) %>% 
+  dplyr::filter(abs(logFC) >= mRNA.lfc.th, adj.P.value <= mRNA.pval.th)
+
+mRNA.diffExp.gct = aggregate(mRNA.diffExp, by = list(mRNA.diffExp$Comparison), unique) %>%
+  dplyr::select(Group.1, GeneSymbol) %>% plyr::rename(c("Group.1" = "Comparison"))
+mRNA.diffExp.gct$GeneSymbol = sapply(mRNA.diffExp.gct$GeneSymbol,
+                                     function(x){paste(unlist(x), collapse = ",")})
+
+# Store gct file in synapse
+if (SYNAPSE_STORE){
+  write.table(mRNA.diffExp.gct, file = "DifferentiallyExpressed_mRNA.gct", sep = '\t', row.names = F, quote = F)
+  
+  mRNA.obj = File("DifferentiallyExpressed_mRNA.gct",
+                  name = "Differentially Expressed mRNA (gct format)",
+                  parentId = parentId)
+  annotations(mRNA.obj) = list(dataType = "mRNA",
+                               logFC.Threshold = mRNA.lfc.th,
+                               adjPvalue.Threshold = mRNA.pval.th)
+  mRNA.obj = synStore(mRNA.obj, used = as.character(mRNAIds),
+                      activityName = activityName, executed = thisFile)
+  
+}
+
+# Print Number of differentially expressed genes
+mRNA.counts = merge(as.data.frame(mRNA.diffExp), compNames, by.x = "Comparison", by.y = "comparisonName") %>%
+  group_by(dataRestrictionShort, class, variable1Short, variable2Short, direction) %>% tally %>% 
+  tidyr::spread(direction, n)
+```
+Number of differentially expressed genes at FDR <= 0.05 and absolute logFC >= 2
+```{r print.mRNA}
+kable(mRNA.counts)
+```
+
+### Download and subset differential expression results (miRNA)
+```{r miRNA}
+miRNAIds = c(miRNAId.all = "syn5014584", miRNAId.eachDiffState = "syn5014597")
+
+miRNA.diffExp = lapply(miRNAIds, downloadFile)
+miRNA.diffExp = rbindlist(miRNA.diffExp) %>% 
+  dplyr::filter(abs(logFC) >= miRNA.lfc.th, adj.P.value <= miRNA.pval.th)
+
+miRNA.diffExp.gct = aggregate(miRNA.diffExp, by = list(miRNA.diffExp$Comparison), unique) %>%
+  dplyr::select(Group.1, GeneSymbol) %>% plyr::rename(c("Group.1" = "Comparison"))
+miRNA.diffExp.gct$GeneSymbol = sapply(miRNA.diffExp.gct$GeneSymbol,
+                                     function(x){paste(unlist(x), collapse = ",")})
+
+# Store gct file in synapse
+if (SYNAPSE_STORE){
+  write.table(miRNA.diffExp.gct, file = "DifferentiallyExpressed_miRNA.gct", sep = '\t', row.names = F, quote = F)
+  
+  miRNA.obj = File("DifferentiallyExpressed_miRNA.gct",
+                  name = "Differentially Expressed miRNA (gct format)",
+                  parentId = parentId)
+  annotations(miRNA.obj) = list(dataType = "miRNA",
+                               logFC.Threshold = miRNA.lfc.th,
+                               adjPvalue.Threshold = miRNA.pval.th)
+  miRNA.obj = synStore(miRNA.obj, used = as.character(miRNAIds),
+                      activityName = activityName, executed = thisFile)
+  
+}
+
+# Print Number of differentially expressed genes
+miRNA.counts = merge(as.data.frame(miRNA.diffExp), compNames, by.x = "Comparison", by.y = "comparisonName") %>%
+  group_by(dataRestrictionShort, class, variable1Short, variable2Short, direction) %>% tally %>% 
+  tidyr::spread(direction, n)
+```
+Number of differentially expressed miRNAs at FDR <= 0.05 and absolute logFC >= 2
+```{r print.miRNA}
+kable(miRNA.counts)
+```
+
+### Download and subset differential splicing results
+```{r splicing}
+splicingIds = c(splicingId.all = "syn5049321", splicingId.DE = "syn5065271", splicingId.EB = "syn5065380", 
+                splicingId.ECTO = "syn5065336", splicingId.MESO5 = "syn5065297", splicingId.SC = "syn5065245")
+
+splicing.diffExp = lapply(splicingIds, downloadFile)
+splicing.diffExp = rbindlist(splicing.diffExp) 
+
+# Download change in beta
+load(synGet('syn5218007')@filePath)
+changePSI = reshape2::melt(changePSI, id.vars = 'JunctionIDs') %>%
+  plyr::rename(c("JunctionIDs" = "Minor-Isoform", "variable" = "Comparison", "value" = "changePSI"))
+
+splicing.diffExp = splicing.diffExp %>%
+  left_join(changePSI %>% as.data.table) %>%
+  dplyr::filter(abs(changePSI) >= splicing.change.th, adj.P.value <= splicing.pval.th)
+
+splicing.diffExp.gct = aggregate(splicing.diffExp, by = list(splicing.diffExp$Comparison), unique) %>%
+  dplyr::select(one_of("Group.1", "Minor-Isoform")) %>% plyr::rename(c("Group.1" = "Comparison","Minor-Isoform"="JunctionID"))
+splicing.diffExp.gct$JunctionID = sapply(splicing.diffExp.gct$JunctionID,
+                                         function(x){paste(unlist(x), collapse = ",")})
+
+# Store gct file in synapse
+if (SYNAPSE_STORE){
+  write.table(splicing.diffExp.gct, file = "DifferentiallySpliced_mRNA.gct", sep = '\t', row.names = F, quote = F)
+  
+  splicing.obj = File("DifferentiallySpliced_mRNA.gct",
+                  name = "Differentially Spliced Junctions (gct format)",
+                  parentId = parentId)
+  annotations(splicing.obj) = list(dataType = "splicing",
+                               changePSI.Threshold = splicing.change.th,
+                               adjPvalue.Threshold = splicing.pval.th)
+  splicing.obj = synStore(splicing.obj, used = as.character(splicingIds),
+                      activityName = activityName, executed = thisFile)  
+}
+
+# Print Number of differentially expressed genes
+splicing.counts = merge(as.data.frame(splicing.diffExp), compNames, by.x = "Comparison", by.y = "comparisonName") %>%
+  group_by(dataRestrictionShort, class, variable1Short, variable2Short, direction) %>% tally %>% 
+  tidyr::spread(direction, n)
+```
+Number of differentially expressed splicings at FDR <= 0.05 and absolute logFC >= 2
+```{r print.splicing}
+kable(splicing.counts)
+```
+
+### Download and subset differential methylation results
+```{r methyl}
+methylIds = c(methylId.all = "syn4527629", methylId.eachDiffState = "syn4598861")
+
+methyl.diffExp = lapply(methylIds, downloadFile)
+methyl.diffExp = rbindlist(methyl.diffExp) 
+
+# Download change in beta
+load(synGet('syn5211292')@filePath)
+changeBeta = changeBeta %>% reshape2::melt(id.vars = "methProbeIDs") %>%
+  plyr::rename(c("variable" = "Comparison", "value" = "changeBeta")) 
+
+methyl.diffExp = methyl.diffExp %>%
+  left_join(as.data.table(changeBeta)) %>%
+  dplyr::filter(abs(changeBeta) >= methyl.changeBeta.th, adj.P.value <= methyl.pval.th)
+
+methyl.diffExp.gct = aggregate(methyl.diffExp, by = list(methyl.diffExp$Comparison), unique) %>%
+  dplyr::select(one_of("Group.1", "methProbeIDs")) %>% plyr::rename(c("Group.1" = "Comparison"))
+
+methyl.diffExp.gct$methProbeIDs = sapply(methyl.diffExp.gct$methProbeIDs,
+                                         function(x){paste(unique(x), collapse = ",")})
+
+# Store gct file in synapse
+if (SYNAPSE_STORE){
+  write.table(methyl.diffExp.gct, file = "DifferentiallyMethylated.gct", sep = '\t', row.names = F, quote = F)
+  
+  methyl.obj = File("DifferentiallyMethylated.gct",
+                  name = "Differentially Methylated Probes (gct format)",
+                  parentId = parentId)
+  annotations(methyl.obj) = list(dataType = "methyl",
+                               changeBeta.Threshold = methyl.changeBeta.th,
+                               adjPvalue.Threshold = methyl.pval.th)
+  methyl.obj = synStore(methyl.obj, used = as.character(methylIds),
+                      activityName = activityName, executed = thisFile)
+}
+
+# Print Number of differentially expressed genes
+methyl.counts = merge(as.data.frame(methyl.diffExp), compNames, by.x = "Comparison", by.y = "comparisonName") %>%
+  group_by(dataRestrictionShort, class, variable1Short, variable2Short, direction) %>% tally %>% 
+  tidyr::spread(direction, n)
+```
+Number of differentially expressed miRNAs at FDR <= 0.05 and absolute logFC >= 2
+```{r print.methyl}
+kable(methyl.counts)
+```
+
+#### Store results in synapse
+```{r synapse.store}
+# knit2synapse::knitfile2synapse(file = "./FilterDifferentialFeatures.Rmd", owner = 'syn5194922',
+#                                overwrite=F)
+```
